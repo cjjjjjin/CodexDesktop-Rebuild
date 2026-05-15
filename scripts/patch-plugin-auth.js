@@ -262,6 +262,27 @@ function findFeatureDefaultPatches(ast, source) {
     }
   });
 
+  // Part A2: Force features.js_repl to true.
+  // This is a separate object {"features.js_repl":!1} that controls whether
+  // the Node.js REPL (Chrome browser control) is exposed to the model.
+  walk(ast, (node) => {
+    if (node.type !== "ObjectExpression") return;
+    const props = node.properties;
+    if (!props || props.length !== 1) return;
+    const prop = props[0];
+    const key = prop.key?.value;
+    if (key !== "features.js_repl") return;
+    const val = source.slice(prop.value.start, prop.value.end);
+    if (val !== "!1") return;
+    patches.push({
+      id: "feature_js_repl",
+      start: prop.value.start,
+      end: prop.value.end,
+      replacement: "!0",
+      original: val,
+    });
+  });
+
   // Part B: Bypass the isAvailable filter in bundled plugins descriptor.
   // Pattern: X.filter(Y => Y.isAvailable({buildFlavor:..., features:..., platform:...}))
   // The filter callback checks features like externalBrowserUseAllowed which may be
