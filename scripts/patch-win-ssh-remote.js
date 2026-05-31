@@ -20,7 +20,7 @@ const {
 } = require("./patch-report");
 
 const PATCH_ID = "win-native-windows-ssh-target-guard";
-const MARKER = "codexWindowsSshRemotePort";
+const MARKER = "openCodexWindowsSshWebSocket";
 const REMOTE_WS_PORT = 42817;
 
 function windowsSshGuardSource() {
@@ -38,6 +38,14 @@ function windowsSshGuardSource() {
 function windowsSshTransportMethodsSource() {
   return [
     "async getCodexWindowsSshLocalPort(){return await new Promise((e,t)=>{let n=h.default.createServer();n.once(`error`,t),n.listen(0,`127.0.0.1`,()=>{let r=n.address(),i=typeof r==`object`&&r?r.port:null;n.close(()=>{i==null?t(Error(`Unable to allocate local SSH tunnel port`)):e(i)})})})}",
+    "async openCodexWindowsSshWebSocket(e,n,r,i){let a=Date.now()+15e3,o=null;for(;;){let s=new t.pn(`ws://127.0.0.1:${n}/rpc`,{perMessageDeflate:!1});try{return await new Promise((c,l)=>{let u=setTimeout(()=>{d(),s.terminate?.(),l(Error(`Timed out waiting for Windows SSH app-server WebSocket`))},1e3),d=()=>{clearTimeout(u),s.removeListener?.(`open`,c),s.removeListener?.(`error`,f),s.removeListener?.(`close`,m)},f=e=>{d(),l(e instanceof Error?e:Error(String(e)))},m=(e,t)=>{d(),l(Error(`codex app-server websocket closed while opening (code=${e})`))};s.once(`open`,()=>{d(),c(s)}),s.once(`error`,f),s.once(`close`,m)})}catch(c){o=c,s.terminate?.();if(Date.now()>=a){let a=Tg(i);throw this.createSshSetupError(`remote_windows_app_server_connect`,Error(`Windows SSH app-server WebSocket did not open on ws://127.0.0.1:${n}/rpc via SSH tunnel to 127.0.0.1:${r}${a?`: ${a}`:``}${o instanceof Error?`: ${o.message}`:``}`))}await new Promise(e=>setTimeout(e,500))}}}",
+    "async connectCodexWindowsSshRemote(e){let n=await this.getCodexWindowsSshLocalPort(),r=this.codexWindowsSshRemotePort;if(r==null)throw Error(`Missing Windows SSH remote app-server port`);let i=`127.0.0.1:${n}:127.0.0.1:${r}`,a=(0,p.spawn)(`ssh`,[`-N`,...wg(),...Eg(this.options.sshConnection),`-L`,i],{env:t.jr(process.env),stdio:[`ignore`,`ignore`,`pipe`]}),o=``;a.stderr?.on(`data`,e=>{o=`${o}${e.toString(`utf8`)}`.slice(-4e3)});let s=await this.openCodexWindowsSshWebSocket(e,n,r,o),c=()=>{a.kill()};return s.once(`close`,c),s.once(`error`,c),a.on(`close`,(n,r)=>{if(n===0)return;this.logger.warning(`ssh_websocket_v0.windows_tunnel_closed`,{safe:{code:n,signal:r,operation:`app_server_windows_tunnel`,...jg(e.shellEnv),sshPhase:e.phase},sensitive:{sshAlias:this.options.sshConnection.alias,sshHost:this.options.sshConnection.host,sshPort:this.options.sshConnection.port,stderr:o}}),s.terminate?.()}),t.fn(s,{onPongTimeout:()=>{s.terminate()}}),new t.mn(s)}",
+  ].join("");
+}
+
+function oldWindowsSshTransportMethodsSource() {
+  return [
+    "async getCodexWindowsSshLocalPort(){return await new Promise((e,t)=>{let n=h.default.createServer();n.once(`error`,t),n.listen(0,`127.0.0.1`,()=>{let r=n.address(),i=typeof r==`object`&&r?r.port:null;n.close(()=>{i==null?t(Error(`Unable to allocate local SSH tunnel port`)):e(i)})})})}",
     "async connectCodexWindowsSshRemote(e){let n=await this.getCodexWindowsSshLocalPort(),r=this.codexWindowsSshRemotePort;if(r==null)throw Error(`Missing Windows SSH remote app-server port`);let i=`127.0.0.1:${n}:127.0.0.1:${r}`,a=(0,p.spawn)(`ssh`,[`-N`,...wg(),...Eg(this.options.sshConnection),`-L`,i],{env:t.jr(process.env),stdio:[`ignore`,`ignore`,`pipe`]}),o=``;a.stderr?.on(`data`,e=>{o=`${o}${e.toString(`utf8`)}`.slice(-4e3)}),await new Promise(e=>setTimeout(e,500));let s=new t.pn(`ws://127.0.0.1:${n}/rpc`,{perMessageDeflate:!1}),c=()=>{a.kill()};return s.once(`close`,c),s.once(`error`,c),a.on(`close`,(n,r)=>{if(n===0)return;this.logger.warning(`ssh_websocket_v0.windows_tunnel_closed`,{safe:{code:n,signal:r,operation:`app_server_windows_tunnel`,...jg(e.shellEnv),sshPhase:e.phase},sensitive:{sshAlias:this.options.sshConnection.alias,sshHost:this.options.sshConnection.host,sshPort:this.options.sshConnection.port,stderr:o}}),s.terminate?.()}),t.fn(s,{onPongTimeout:()=>{s.terminate()}}),new t.mn(s)}",
   ].join("");
 }
@@ -52,7 +60,9 @@ function applyWindowsSshRemoteGuardPatch(source) {
     ",await this.ensureRemoteAppServer({phase:`connect`,shellEnv:e.getState()});let n=null,r=new t.pn(vg,{";
   const connectReplacement =
     ";let codexSshConnectContext={phase:`connect`,shellEnv:e.getState()};await this.ensureRemoteAppServer(codexSshConnectContext);if(this.codexWindowsSshRemotePort!=null)return await this.connectCodexWindowsSshRemote(codexSshConnectContext);let n=null,r=new t.pn(vg,{";
-  if (patched.includes(connectNeedle)) {
+  if (patched.includes("connectCodexWindowsSshRemote(codexSshConnectContext)")) {
+    // Already has the Windows SSH connect branch; later blocks may still upgrade transport helpers.
+  } else if (patched.includes(connectNeedle)) {
     patched = patched.replace(connectNeedle, connectReplacement);
     changed = true;
   } else {
@@ -60,7 +70,9 @@ function applyWindowsSshRemoteGuardPatch(source) {
   }
 
   const startNeedle = "async startRemoteAppServer(n){let r=eg(),i;";
-  if (patched.includes(startNeedle)) {
+  if (patched.includes("codexWindowsSshProbeResult")) {
+    // Already has the Windows bootstrap branch; avoid duplicating it during helper upgrades.
+  } else if (patched.includes(startNeedle)) {
     patched = patched.replace(startNeedle, `${startNeedle}${windowsSshGuardSource()}`);
     changed = true;
   } else {
@@ -76,7 +88,11 @@ function applyWindowsSshRemoteGuardPatch(source) {
   }
 
   const proxyNeedle = "createSshProxyStream(e){";
-  if (patched.includes(proxyNeedle)) {
+  const oldTransportMethods = oldWindowsSshTransportMethodsSource();
+  if (patched.includes(oldTransportMethods)) {
+    patched = patched.replace(oldTransportMethods, windowsSshTransportMethodsSource());
+    changed = true;
+  } else if (patched.includes(proxyNeedle)) {
     patched = patched.replace(proxyNeedle, `${windowsSshTransportMethodsSource()}${proxyNeedle}`);
     changed = true;
   } else {
