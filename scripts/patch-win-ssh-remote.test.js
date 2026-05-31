@@ -31,6 +31,8 @@ test("injects a native Windows SSH transport before the POSIX bootstrap", () => 
   assert.match(patched, /app-server.*--listen.*ws:\/\/127\.0\.0\.1:/);
   assert.match(patched, /Get-Command/);
   assert.match(patched, /\$codexExt/);
+  assert.match(patched, /\$codexCmd/);
+  assert.match(patched, /ChangeExtension\(\$codex,'\.cmd'\)/);
   assert.match(patched, /-File.*\$codex.*app-server/s);
   assert.match(patched, /Start-Process -WindowStyle Hidden/);
   assert.match(patched, /-EncodedCommand/);

@@ -20,11 +20,11 @@ const {
 } = require("./patch-report");
 
 const PATCH_ID = "win-native-windows-ssh-target-guard";
-const MARKER = "$codexExt";
+const MARKER = "$codexCmd";
 const REMOTE_WS_PORT = 42817;
 
 function windowsSshStartScriptSource() {
-  return `$ErrorActionPreference='Continue'; $dir=Join-Path $env:USERPROFILE '.codex/app-server-control'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $out=Join-Path $dir 'app-server.out.log'; $err=Join-Path $dir 'app-server.err.log'; $listen='ws://127.0.0.1:\${this.codexWindowsSshRemotePort}'; $codex=(Get-Command \${r} -ErrorAction SilentlyContinue).Source; if(-not $codex){ Write-Error 'codex not found in PATH'; exit 9009 }; $codexExt=[IO.Path]::GetExtension($codex).ToLowerInvariant(); if($codexExt -eq '.ps1'){ $launcher='powershell.exe'; $launcherArgs=@('-NoProfile','-ExecutionPolicy','Bypass','-File',$codex,'app-server','--listen',$listen) } elseif($codexExt -eq '.cmd' -or $codexExt -eq '.bat'){ $launcher='cmd.exe'; $launcherArgs=@('/d','/s','/c','"'+$codex+'" app-server --listen '+$listen) } else { $launcher=$codex; $launcherArgs=@('app-server','--listen',$listen) }; Start-Process -WindowStyle Hidden -FilePath $launcher -ArgumentList $launcherArgs -RedirectStandardOutput $out -RedirectStandardError $err; exit 0`;
+  return `$ErrorActionPreference='Continue'; $dir=Join-Path $env:USERPROFILE '.codex/app-server-control'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $out=Join-Path $dir 'app-server.out.log'; $err=Join-Path $dir 'app-server.err.log'; $listen='ws://127.0.0.1:\${this.codexWindowsSshRemotePort}'; $codex=(Get-Command \${r} -ErrorAction SilentlyContinue).Source; if(-not $codex){ Write-Error 'codex not found in PATH'; exit 9009 }; $codexExt=[IO.Path]::GetExtension($codex).ToLowerInvariant(); $codexCmd=[IO.Path]::ChangeExtension($codex,'.cmd'); if($codexExt -eq '.ps1' -and (Test-Path $codexCmd)){ $launcher='cmd.exe'; $launcherArgs='/d /s /c ""'+$codexCmd+'" app-server --listen '+$listen+'"' } elseif($codexExt -eq '.ps1'){ $launcher='powershell.exe'; $launcherArgs=@('-NoProfile','-ExecutionPolicy','Bypass','-File',$codex,'app-server','--listen',$listen) } elseif($codexExt -eq '.cmd' -or $codexExt -eq '.bat'){ $launcher='cmd.exe'; $launcherArgs='/d /s /c ""'+$codex+'" app-server --listen '+$listen+'"' } else { $launcher=$codex; $launcherArgs=@('app-server','--listen',$listen) }; Start-Process -WindowStyle Hidden -FilePath $launcher -ArgumentList $launcherArgs -RedirectStandardOutput $out -RedirectStandardError $err; exit 0`;
 }
 
 function windowsSshStartSource() {
@@ -94,7 +94,15 @@ function applyWindowsSshRemoteGuardPatch(source) {
   const directPowerShellStartSource = directPowerShellWindowsSshStartSource();
   const encodedPowerShellStartSourceWithoutShimHandling =
     encodedPowerShellWindowsSshStartSourceWithoutShimHandling();
-  if (patched.includes(oldStartSource)) {
+  const encodedStartScriptRegex =
+    /let codexWindowsSshStartScript=`[^`]*`,codexWindowsSshStartCommand=/u;
+  if (patched.includes("codexWindowsSshStartScript=`") && !patched.includes("$codexCmd")) {
+    patched = patched.replace(
+      encodedStartScriptRegex,
+      `let codexWindowsSshStartScript=\`${windowsSshStartScriptSource()}\`,codexWindowsSshStartCommand=`,
+    );
+    changed = patched !== source;
+  } else if (patched.includes(oldStartSource)) {
     patched = patched.replace(oldStartSource, windowsSshStartSource());
     changed = true;
   } else if (patched.includes(directPowerShellStartSource)) {
