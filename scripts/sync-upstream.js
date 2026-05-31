@@ -223,7 +223,7 @@ function assembleOutput(resourcesDir, destDir, label) {
   // 1. Extract app.asar → _asar/ (for patching)
   const asarDest = path.join(destDir, "_asar");
   console.log("   [asar extract] -> _asar/");
-  execSync(`npx asar extract "${asarPath}" "${asarDest}"`);
+  execSync(`node "${path.join(__dirname, "extract-asar-tolerant.mjs")}" "${asarPath}" "${asarDest}"`, { stdio: "inherit" });
 
   // 2. Copy app.asar.unpacked/ as-is (native modules)
   const unpackedSrc = path.join(resourcesDir, "app.asar.unpacked");
@@ -302,17 +302,17 @@ async function main() {
   if (!SKIP_MAC && results["mac-arm64"]) {
     try {
       results["mac-arm64"] = await syncMac("arm64", APPCAST_ARM64, path.join(SRC_DIR, "mac-arm64"));
-    } catch (e) { console.error(`   [x] mac-arm64: ${e.message}`); }
+    } catch (e) { console.error(`   [x] mac-arm64: ${e.message}`); results["mac-arm64"].failed = true; }
   }
   if (!SKIP_MAC && results["mac-x64"]) {
     try {
       results["mac-x64"] = await syncMac("x64", APPCAST_X64, path.join(SRC_DIR, "mac-x64"));
-    } catch (e) { console.error(`   [x] mac-x64: ${e.message}`); }
+    } catch (e) { console.error(`   [x] mac-x64: ${e.message}`); results["mac-x64"].failed = true; }
   }
   if (!SKIP_WIN && results.win) {
     try {
       results.win = await syncWin(path.join(SRC_DIR, "win"));
-    } catch (e) { console.error(`   [x] win: ${e.message}`); }
+    } catch (e) { console.error(`   [x] win: ${e.message}`); results.win.failed = true; }
   }
 
   const saved = loadVersions();
@@ -323,8 +323,9 @@ async function main() {
 
   console.log("\n== Done ==");
   for (const [key, info] of Object.entries(results)) {
-    console.log(`   ${key}: ${info.version}`);
+    console.log(`   ${key}: ${info.version}${info.failed ? " (failed)" : ""}`);
   }
+  if (Object.values(results).some((info) => info.failed)) process.exit(1);
 }
 
 main().catch((e) => { console.error(`\n[x] ${e.message}`); process.exit(1); });
