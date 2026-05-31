@@ -30,6 +30,8 @@ test("injects a native Windows SSH transport before the POSIX bootstrap", () => 
   assert.doesNotMatch(patched, /setTimeout\(\(\)=>\{d\(\);?try\{?s\.terminate/);
   assert.match(patched, /app-server.*--listen.*ws:\/\/127\.0\.0\.1:/);
   assert.match(patched, /Get-Command/);
+  assert.match(patched, /\$codexExt/);
+  assert.match(patched, /-File.*\$codex.*app-server/s);
   assert.match(patched, /Start-Process -WindowStyle Hidden/);
   assert.match(patched, /-EncodedCommand/);
   assert.doesNotMatch(patched, /-Command "\$ErrorActionPreference/);

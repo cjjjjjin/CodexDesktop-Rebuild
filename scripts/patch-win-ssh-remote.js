@@ -20,11 +20,11 @@ const {
 } = require("./patch-report");
 
 const PATCH_ID = "win-native-windows-ssh-target-guard";
-const MARKER = "codexWindowsSshStartScript";
+const MARKER = "$codexExt";
 const REMOTE_WS_PORT = 42817;
 
 function windowsSshStartScriptSource() {
-  return `$ErrorActionPreference='Continue'; $dir=Join-Path $env:USERPROFILE '.codex/app-server-control'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $out=Join-Path $dir 'app-server.out.log'; $err=Join-Path $dir 'app-server.err.log'; $codex=(Get-Command \${r} -ErrorAction SilentlyContinue).Source; if(-not $codex){ Write-Error 'codex not found in PATH'; exit 9009 }; Start-Process -WindowStyle Hidden -FilePath $codex -ArgumentList @('app-server','--listen','ws://127.0.0.1:\${this.codexWindowsSshRemotePort}') -RedirectStandardOutput $out -RedirectStandardError $err; exit 0`;
+  return `$ErrorActionPreference='Continue'; $dir=Join-Path $env:USERPROFILE '.codex/app-server-control'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $out=Join-Path $dir 'app-server.out.log'; $err=Join-Path $dir 'app-server.err.log'; $listen='ws://127.0.0.1:\${this.codexWindowsSshRemotePort}'; $codex=(Get-Command \${r} -ErrorAction SilentlyContinue).Source; if(-not $codex){ Write-Error 'codex not found in PATH'; exit 9009 }; $codexExt=[IO.Path]::GetExtension($codex).ToLowerInvariant(); if($codexExt -eq '.ps1'){ $launcher='powershell.exe'; $launcherArgs=@('-NoProfile','-ExecutionPolicy','Bypass','-File',$codex,'app-server','--listen',$listen) } elseif($codexExt -eq '.cmd' -or $codexExt -eq '.bat'){ $launcher='cmd.exe'; $launcherArgs=@('/d','/s','/c','"'+$codex+'" app-server --listen '+$listen) } else { $launcher=$codex; $launcherArgs=@('app-server','--listen',$listen) }; Start-Process -WindowStyle Hidden -FilePath $launcher -ArgumentList $launcherArgs -RedirectStandardOutput $out -RedirectStandardError $err; exit 0`;
 }
 
 function windowsSshStartSource() {
@@ -33,6 +33,10 @@ function windowsSshStartSource() {
 
 function directPowerShellWindowsSshStartSource() {
   return `let codexWindowsSshStartCommand=\`powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Continue'; $dir=Join-Path $env:USERPROFILE '.codex/app-server-control'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $out=Join-Path $dir 'app-server.out.log'; $err=Join-Path $dir 'app-server.err.log'; $codex=(Get-Command \${r} -ErrorAction SilentlyContinue).Source; if(-not $codex){ Write-Error 'codex not found in PATH'; exit 9009 }; Start-Process -WindowStyle Hidden -FilePath $codex -ArgumentList @('app-server','--listen','ws://127.0.0.1:\${this.codexWindowsSshRemotePort}') -RedirectStandardOutput $out -RedirectStandardError $err; exit 0"\`,codexWindowsSshStartProcess=t.Tn({args:[\`ssh\`,...wg(),...Eg(this.options.sshConnection),codexWindowsSshStartCommand],forceSpawnOutsideWsl:!0}),codexWindowsSshStartResult=await Pg({process:codexWindowsSshStartProcess,timeoutMs:_g.remoteBootstrapCommand,timeoutMessage:\`SSH: remote Windows app-server bootstrap timed out\`});if(codexWindowsSshStartResult.code!==0)throw this.createSshSetupError(\`remote_windows_app_server_start\`,Error(await this.getSshCommandFailureMessage(codexWindowsSshStartResult)));return`;
+}
+
+function encodedPowerShellWindowsSshStartSourceWithoutShimHandling() {
+  return `let codexWindowsSshStartScript=\`$ErrorActionPreference='Continue'; $dir=Join-Path $env:USERPROFILE '.codex/app-server-control'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $out=Join-Path $dir 'app-server.out.log'; $err=Join-Path $dir 'app-server.err.log'; $codex=(Get-Command \${r} -ErrorAction SilentlyContinue).Source; if(-not $codex){ Write-Error 'codex not found in PATH'; exit 9009 }; Start-Process -WindowStyle Hidden -FilePath $codex -ArgumentList @('app-server','--listen','ws://127.0.0.1:\${this.codexWindowsSshRemotePort}') -RedirectStandardOutput $out -RedirectStandardError $err; exit 0\`,codexWindowsSshStartCommand=\`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand \${Buffer.from(codexWindowsSshStartScript,\`utf16le\`).toString(\`base64\`)}\`,codexWindowsSshStartProcess=t.Tn({args:[\`ssh\`,...wg(),...Eg(this.options.sshConnection),codexWindowsSshStartCommand],forceSpawnOutsideWsl:!0}),codexWindowsSshStartResult=await Pg({process:codexWindowsSshStartProcess,timeoutMs:_g.remoteBootstrapCommand,timeoutMessage:\`SSH: remote Windows app-server bootstrap timed out\`});if(codexWindowsSshStartResult.code!==0)throw this.createSshSetupError(\`remote_windows_app_server_start\`,Error(await this.getSshCommandFailureMessage(codexWindowsSshStartResult)));return`;
 }
 
 function oldWindowsSshStartSource() {
@@ -88,11 +92,16 @@ function applyWindowsSshRemoteGuardPatch(source) {
   const startNeedle = "async startRemoteAppServer(n){let r=eg(),i;";
   const oldStartSource = oldWindowsSshStartSource();
   const directPowerShellStartSource = directPowerShellWindowsSshStartSource();
+  const encodedPowerShellStartSourceWithoutShimHandling =
+    encodedPowerShellWindowsSshStartSourceWithoutShimHandling();
   if (patched.includes(oldStartSource)) {
     patched = patched.replace(oldStartSource, windowsSshStartSource());
     changed = true;
   } else if (patched.includes(directPowerShellStartSource)) {
     patched = patched.replace(directPowerShellStartSource, windowsSshStartSource());
+    changed = true;
+  } else if (patched.includes(encodedPowerShellStartSourceWithoutShimHandling)) {
+    patched = patched.replace(encodedPowerShellStartSourceWithoutShimHandling, windowsSshStartSource());
     changed = true;
   } else if (patched.includes("codexWindowsSshProbeResult")) {
     // Already has the Windows bootstrap branch; avoid duplicating it during helper upgrades.
