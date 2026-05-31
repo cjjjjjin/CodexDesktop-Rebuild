@@ -24,7 +24,7 @@ const MARKER = "codexWindowsSshProbeCommand";
 const REMOTE_WS_PORT = 42817;
 
 function windowsSshStartScriptSource() {
-  return `$ErrorActionPreference='Continue'; $dir=Join-Path $env:USERPROFILE '.codex/app-server-control'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $out=Join-Path $dir 'app-server.out.log'; $err=Join-Path $dir 'app-server.err.log'; $listen='ws://127.0.0.1:\${this.codexWindowsSshRemotePort}'; $codex=(Get-Command \${r} -ErrorAction SilentlyContinue).Source; if(-not $codex){ Write-Error 'codex not found in PATH'; exit 9009 }; $codexExt=[IO.Path]::GetExtension($codex).ToLowerInvariant(); $codexCmd=[IO.Path]::ChangeExtension($codex,'.cmd'); if($codexExt -eq '.ps1' -and (Test-Path $codexCmd)){ $launcher='cmd.exe'; $launcherArgs='/d /s /c ""'+$codexCmd+'" app-server --listen '+$listen+'"' } elseif($codexExt -eq '.ps1'){ $launcher='powershell.exe'; $launcherArgs=@('-NoProfile','-ExecutionPolicy','Bypass','-File',$codex,'app-server','--listen',$listen) } elseif($codexExt -eq '.cmd' -or $codexExt -eq '.bat'){ $launcher='cmd.exe'; $launcherArgs='/d /s /c ""'+$codex+'" app-server --listen '+$listen+'"' } else { $launcher=$codex; $launcherArgs=@('app-server','--listen',$listen) }; Start-Process -WindowStyle Hidden -FilePath $launcher -ArgumentList $launcherArgs -RedirectStandardOutput $out -RedirectStandardError $err; exit 0`;
+  return `$ErrorActionPreference='Continue'; $dir=Join-Path $env:USERPROFILE '.codex/app-server-control'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $out=Join-Path $dir 'app-server.out.log'; $err=Join-Path $dir 'app-server.err.log'; $listen='ws://127.0.0.1:\${this.codexWindowsSshRemotePort}'; $codex=(Get-Command \${r} -ErrorAction SilentlyContinue).Source; if(-not $codex){ Write-Error 'codex not found in PATH'; exit 9009 }; $codexDir=Split-Path -Parent $codex; $codexJs=Join-Path $codexDir 'node_modules/@openai/codex/bin/codex.js'; $node=(Get-Command node -ErrorAction SilentlyContinue).Source; $codexExt=[IO.Path]::GetExtension($codex).ToLowerInvariant(); $codexCmd=[IO.Path]::ChangeExtension($codex,'.cmd'); if($node -and (Test-Path $codexJs)){ $launcher=$node; $launcherArgs=@($codexJs,'app-server','--listen',$listen) } elseif($codexExt -eq '.ps1' -and (Test-Path $codexCmd)){ $launcher='cmd.exe'; $launcherArgs='/d /s /c ""'+$codexCmd+'" app-server --listen '+$listen+'"' } elseif($codexExt -eq '.ps1'){ $launcher='powershell.exe'; $launcherArgs=@('-NoProfile','-ExecutionPolicy','Bypass','-File',$codex,'app-server','--listen',$listen) } elseif($codexExt -eq '.cmd' -or $codexExt -eq '.bat'){ $launcher='cmd.exe'; $launcherArgs='/d /s /c ""'+$codex+'" app-server --listen '+$listen+'"' } else { $launcher=$codex; $launcherArgs=@('app-server','--listen',$listen) }; Start-Process -WindowStyle Hidden -FilePath $launcher -ArgumentList $launcherArgs -RedirectStandardOutput $out -RedirectStandardError $err; exit 0`;
 }
 
 function windowsSshStartSource() {
@@ -32,7 +32,7 @@ function windowsSshStartSource() {
 }
 
 function windowsSshProbePreambleSource() {
-  return "let codexWindowsSshProbeScript=`[Environment]::OSVersion.VersionString`,codexWindowsSshProbeCommand=`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(codexWindowsSshProbeScript,`utf16le`).toString(`base64`)}`,codexWindowsSshProbeProcess=t.Tn({args:[`ssh`,...wg(),...Eg(this.options.sshConnection),codexWindowsSshProbeCommand],forceSpawnOutsideWsl:!0});codexWindowsSshProbeResult=await Pg({process:codexWindowsSshProbeProcess,timeoutMs:1e4,timeoutMessage:`SSH: remote Windows probe timed out`});let codexWindowsSshProbeOutput=`${codexWindowsSshProbeProcess.getStdout().toString(`utf8`)}\\n${codexWindowsSshProbeResult.stderr??``}`;if((codexWindowsSshProbeResult.code===0&&/Windows/i.test(codexWindowsSshProbeOutput))||/OpenSSH_for_Windows/i.test(codexWindowsSshProbeOutput)){";
+  return "let codexWindowsSshProbeScript=`[Environment]::OSVersion.VersionString`,codexWindowsSshProbeCommand=`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(codexWindowsSshProbeScript,`utf16le`).toString(`base64`)}`,codexWindowsSshProbeProcess=t.Tn({args:[`ssh`,...wg(),...Eg(this.options.sshConnection),codexWindowsSshProbeCommand],forceSpawnOutsideWsl:!0});codexWindowsSshProbeResult=await Pg({process:codexWindowsSshProbeProcess,timeoutMs:1e4,timeoutMessage:`SSH: remote Windows probe timed out`});let codexWindowsSshProbeOutput=`${codexWindowsSshProbeProcess.getStdout().toString(`utf8`)}\\n${codexWindowsSshProbeResult.stderr??``}`;if(codexWindowsSshProbeResult.code===0&&/Windows/i.test(codexWindowsSshProbeOutput)){";
 }
 
 function directPowerShellWindowsSshStartSource() {
@@ -72,7 +72,14 @@ function oldWindowsSshTransportMethodsSource() {
 }
 
 function applyWindowsSshRemoteGuardPatch(source) {
-  if (source.includes(MARKER) && source.includes("$codexCmd")) return source;
+  if (
+    source.includes(MARKER) &&
+    source.includes("$codexCmd") &&
+    source.includes("$codexJs") &&
+    !source.includes("OpenSSH_for_Windows")
+  ) {
+    return source;
+  }
 
   let patched = source;
   let changed = false;
@@ -102,8 +109,14 @@ function applyWindowsSshRemoteGuardPatch(source) {
   if (oldProbeRegex.test(patched)) {
     patched = patched.replace(oldProbeRegex, windowsSshProbePreambleSource());
     changed = true;
+  } else if (patched.includes("||/OpenSSH_for_Windows/i.test(codexWindowsSshProbeOutput)")) {
+    patched = patched.replace(
+      "if((codexWindowsSshProbeResult.code===0&&/Windows/i.test(codexWindowsSshProbeOutput))||/OpenSSH_for_Windows/i.test(codexWindowsSshProbeOutput)){",
+      "if(codexWindowsSshProbeResult.code===0&&/Windows/i.test(codexWindowsSshProbeOutput)){",
+    );
+    changed = true;
   }
-  if (patched.includes("codexWindowsSshStartScript=`") && !patched.includes("$codexCmd")) {
+  if (patched.includes("codexWindowsSshStartScript=`") && !patched.includes("$codexJs")) {
     patched = patched.replace(
       encodedStartScriptRegex,
       `let codexWindowsSshStartScript=\`${windowsSshStartScriptSource()}\`,codexWindowsSshStartCommand=`,

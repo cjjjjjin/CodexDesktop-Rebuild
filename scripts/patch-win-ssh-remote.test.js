@@ -32,6 +32,9 @@ test("injects a native Windows SSH transport before the POSIX bootstrap", () => 
   assert.match(patched, /Get-Command/);
   assert.match(patched, /\$codexExt/);
   assert.match(patched, /\$codexCmd/);
+  assert.match(patched, /\$codexJs/);
+  assert.match(patched, /node_modules\/@openai\/codex\/bin\/codex\.js/);
+  assert.match(patched, /Get-Command node/);
   assert.match(patched, /ChangeExtension\(\$codex,'\.cmd'\)/);
   assert.match(patched, /-File.*\$codex.*app-server/s);
   assert.match(patched, /Start-Process -WindowStyle Hidden/);
@@ -40,7 +43,7 @@ test("injects a native Windows SSH transport before the POSIX bootstrap", () => 
   assert.match(patched, /-L/);
   assert.match(patched, /\[Environment\]::OSVersion\.VersionString/);
   assert.match(patched, /codexWindowsSshProbeCommand/);
-  assert.match(patched, /OpenSSH_for_Windows/);
+  assert.doesNotMatch(patched, /OpenSSH_for_Windows/);
   assert.doesNotMatch(patched, /cmd\.exe \/c ver/);
   assert.doesNotMatch(patched, /,let codexSshConnectContext/);
   assert.match(patched, /\}\);let codexSshConnectContext=/);
@@ -48,6 +51,19 @@ test("injects a native Windows SSH transport before the POSIX bootstrap", () => 
     patched.indexOf("codexWindowsSshProbeCommand") < patched.indexOf("codex_path_probe"),
     "Windows probe should run before codex_path_probe",
   );
+});
+
+test("upgrades the Windows SSH probe without using the local OpenSSH banner", () => {
+  const patchedWithBannerFallback = applyWindowsSshRemoteGuardPatch(fixture).replace(
+    "if((codexWindowsSshProbeResult.code===0&&/Windows/i.test(codexWindowsSshProbeOutput))){",
+    "if((codexWindowsSshProbeResult.code===0&&/Windows/i.test(codexWindowsSshProbeOutput))||/OpenSSH_for_Windows/i.test(codexWindowsSshProbeOutput)){",
+  );
+
+  const upgraded = applyWindowsSshRemoteGuardPatch(patchedWithBannerFallback);
+
+  assert.doesNotMatch(upgraded, /OpenSSH_for_Windows/);
+  assert.match(upgraded, /\[Environment\]::OSVersion\.VersionString/);
+  assert.match(upgraded, /\$codexCmd/);
 });
 
 test("Windows SSH guard patch is idempotent", () => {
