@@ -25,6 +25,7 @@ test("injects a native Windows SSH transport before the POSIX bootstrap", () => 
   assert.match(patched, /openCodexWindowsSshWebSocket/);
   assert.match(patched, /connectCodexWindowsSshRemote/);
   assert.match(patched, /remote_windows_app_server_connect/);
+  assert.match(patched, /s\.on\?\.\(`error`,\(\)=>\{\}\)/);
   assert.match(patched, /setTimeout\(\(\)=>\{d\(\),l\(Error\(`Timed out waiting for Windows SSH app-server WebSocket`\)\)\}/);
   assert.doesNotMatch(patched, /setTimeout\(\(\)=>\{d\(\);?try\{?s\.terminate/);
   assert.match(patched, /app-server --listen ws:\/\/127\.0\.0\.1:/);
