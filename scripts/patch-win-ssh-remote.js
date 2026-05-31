@@ -20,8 +20,16 @@ const {
 } = require("./patch-report");
 
 const PATCH_ID = "win-native-windows-ssh-target-guard";
-const MARKER = "s.on?.(`error`,()=>{});try{return await new Promise";
+const MARKER = "Start-Process -WindowStyle Hidden";
 const REMOTE_WS_PORT = 42817;
+
+function windowsSshStartSource() {
+  return `let codexWindowsSshStartCommand=\`powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Continue'; $dir=Join-Path $env:USERPROFILE '.codex/app-server-control'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $out=Join-Path $dir 'app-server.out.log'; $err=Join-Path $dir 'app-server.err.log'; $codex=(Get-Command \${r} -ErrorAction SilentlyContinue).Source; if(-not $codex){ Write-Error 'codex not found in PATH'; exit 9009 }; Start-Process -WindowStyle Hidden -FilePath $codex -ArgumentList @('app-server','--listen','ws://127.0.0.1:\${this.codexWindowsSshRemotePort}') -RedirectStandardOutput $out -RedirectStandardError $err; exit 0"\`,codexWindowsSshStartProcess=t.Tn({args:[\`ssh\`,...wg(),...Eg(this.options.sshConnection),codexWindowsSshStartCommand],forceSpawnOutsideWsl:!0}),codexWindowsSshStartResult=await Pg({process:codexWindowsSshStartProcess,timeoutMs:_g.remoteBootstrapCommand,timeoutMessage:\`SSH: remote Windows app-server bootstrap timed out\`});if(codexWindowsSshStartResult.code!==0)throw this.createSshSetupError(\`remote_windows_app_server_start\`,Error(await this.getSshCommandFailureMessage(codexWindowsSshStartResult)));return`;
+}
+
+function oldWindowsSshStartSource() {
+  return `let codexWindowsSshStartCommand=\`cmd.exe /d /s /c "if not exist \\"%USERPROFILE%\\\\.codex\\\\app-server-control\\" mkdir \\"%USERPROFILE%\\\\.codex\\\\app-server-control\\" & start \\"\\" /b \${r} app-server --listen ws://127.0.0.1:\${this.codexWindowsSshRemotePort} > \\"%USERPROFILE%\\\\.codex\\\\app-server-control\\\\app-server.log\\" 2>&1"\`,codexWindowsSshStartProcess=t.Tn({args:[\`ssh\`,...wg(),...Eg(this.options.sshConnection),codexWindowsSshStartCommand],forceSpawnOutsideWsl:!0}),codexWindowsSshStartResult=await Pg({process:codexWindowsSshStartProcess,timeoutMs:_g.remoteBootstrapCommand,timeoutMessage:\`SSH: remote Windows app-server bootstrap timed out\`});if(codexWindowsSshStartResult.code!==0)throw this.createSshSetupError(\`remote_windows_app_server_start\`,Error(await this.getSshCommandFailureMessage(codexWindowsSshStartResult)));return`;
+}
 
 function windowsSshGuardSource() {
   return [
@@ -30,7 +38,7 @@ function windowsSshGuardSource() {
     "let codexWindowsSshProbeProcess=t.Tn({args:[`ssh`,...wg(),...Eg(this.options.sshConnection),`cmd.exe /c ver`],forceSpawnOutsideWsl:!0});",
     "codexWindowsSshProbeResult=await Pg({process:codexWindowsSshProbeProcess,timeoutMs:1e4,timeoutMessage:`SSH: remote Windows probe timed out`});",
     "let codexWindowsSshProbeOutput=`${codexWindowsSshProbeProcess.getStdout().toString(`utf8`)}\\n${codexWindowsSshProbeResult.stderr??``}`;",
-    `if(codexWindowsSshProbeResult.code===0&&/Microsoft Windows/i.test(codexWindowsSshProbeOutput)){this.codexWindowsSshRemotePort=${REMOTE_WS_PORT};let codexWindowsSshStartCommand=\`cmd.exe /d /s /c "if not exist \\"%USERPROFILE%\\\\.codex\\\\app-server-control\\" mkdir \\"%USERPROFILE%\\\\.codex\\\\app-server-control\\" & start \\"\\" /b \${r} app-server --listen ws://127.0.0.1:\${this.codexWindowsSshRemotePort} > \\"%USERPROFILE%\\\\.codex\\\\app-server-control\\\\app-server.log\\" 2>&1"\`,codexWindowsSshStartProcess=t.Tn({args:[\`ssh\`,...wg(),...Eg(this.options.sshConnection),codexWindowsSshStartCommand],forceSpawnOutsideWsl:!0}),codexWindowsSshStartResult=await Pg({process:codexWindowsSshStartProcess,timeoutMs:_g.remoteBootstrapCommand,timeoutMessage:\`SSH: remote Windows app-server bootstrap timed out\`});if(codexWindowsSshStartResult.code!==0)throw this.createSshSetupError(\`remote_windows_app_server_start\`,Error(await this.getSshCommandFailureMessage(codexWindowsSshStartResult)));return}`,
+    `if(codexWindowsSshProbeResult.code===0&&/Microsoft Windows/i.test(codexWindowsSshProbeOutput)){this.codexWindowsSshRemotePort=${REMOTE_WS_PORT};${windowsSshStartSource()}}`,
     "}catch(e){if(e instanceof t.wn)throw e;this.logger.info(`ssh_websocket_v0.remote_windows_probe_skipped`,{safe:{},sensitive:{error:e,sshAlias:this.options.sshConnection.alias,sshHost:this.options.sshConnection.host,sshPort:this.options.sshConnection.port}})}",
   ].join("");
 }
@@ -70,7 +78,11 @@ function applyWindowsSshRemoteGuardPatch(source) {
   }
 
   const startNeedle = "async startRemoteAppServer(n){let r=eg(),i;";
-  if (patched.includes("codexWindowsSshProbeResult")) {
+  const oldStartSource = oldWindowsSshStartSource();
+  if (patched.includes(oldStartSource)) {
+    patched = patched.replace(oldStartSource, windowsSshStartSource());
+    changed = true;
+  } else if (patched.includes("codexWindowsSshProbeResult")) {
     // Already has the Windows bootstrap branch; avoid duplicating it during helper upgrades.
   } else if (patched.includes(startNeedle)) {
     patched = patched.replace(startNeedle, `${startNeedle}${windowsSshGuardSource()}`);

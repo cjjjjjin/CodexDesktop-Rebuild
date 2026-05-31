@@ -28,7 +28,9 @@ test("injects a native Windows SSH transport before the POSIX bootstrap", () => 
   assert.match(patched, /s\.on\?\.\(`error`,\(\)=>\{\}\)/);
   assert.match(patched, /setTimeout\(\(\)=>\{d\(\),l\(Error\(`Timed out waiting for Windows SSH app-server WebSocket`\)\)\}/);
   assert.doesNotMatch(patched, /setTimeout\(\(\)=>\{d\(\);?try\{?s\.terminate/);
-  assert.match(patched, /app-server --listen ws:\/\/127\.0\.0\.1:/);
+  assert.match(patched, /app-server.*--listen.*ws:\/\/127\.0\.0\.1:/);
+  assert.match(patched, /Get-Command/);
+  assert.match(patched, /Start-Process -WindowStyle Hidden/);
   assert.match(patched, /-L/);
   assert.match(patched, /cmd\.exe \/c ver/);
   assert.doesNotMatch(patched, /,let codexSshConnectContext/);
