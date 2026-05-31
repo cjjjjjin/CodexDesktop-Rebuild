@@ -18,6 +18,7 @@ const PATCHES = [
   "patch-fast-mode.js",
   "patch-plugin-auth.js",
   "patch-updater.js",
+  "patch-win-ssh-remote.js",
   "patch-archive-delete.js",
 ];
 
