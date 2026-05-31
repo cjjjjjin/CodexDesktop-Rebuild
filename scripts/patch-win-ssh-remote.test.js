@@ -38,11 +38,14 @@ test("injects a native Windows SSH transport before the POSIX bootstrap", () => 
   assert.match(patched, /-EncodedCommand/);
   assert.doesNotMatch(patched, /-Command "\$ErrorActionPreference/);
   assert.match(patched, /-L/);
-  assert.match(patched, /cmd\.exe \/c ver/);
+  assert.match(patched, /\[Environment\]::OSVersion\.VersionString/);
+  assert.match(patched, /codexWindowsSshProbeCommand/);
+  assert.match(patched, /OpenSSH_for_Windows/);
+  assert.doesNotMatch(patched, /cmd\.exe \/c ver/);
   assert.doesNotMatch(patched, /,let codexSshConnectContext/);
   assert.match(patched, /\}\);let codexSshConnectContext=/);
   assert.ok(
-    patched.indexOf("cmd.exe /c ver") < patched.indexOf("codex_path_probe"),
+    patched.indexOf("codexWindowsSshProbeCommand") < patched.indexOf("codex_path_probe"),
     "Windows probe should run before codex_path_probe",
   );
 });

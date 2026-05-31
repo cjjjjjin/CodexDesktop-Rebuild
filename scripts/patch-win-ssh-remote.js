@@ -5,7 +5,7 @@
  * Codex Desktop's SSH transport bootstraps a POSIX shell and starts the remote
  * app server with a Unix socket. Native Windows OpenSSH hosts can fail either
  * in the PowerShell bootstrap path or later when the Unix socket transport is
- * unavailable. This patch adds a raw `cmd.exe /c ver` probe before the POSIX
+ * unavailable. This patch adds an encoded PowerShell OS probe before the POSIX
  * bootstrap. When the remote is native Windows, it starts the remote app-server
  * on a loopback WebSocket endpoint and connects through an SSH local forward.
  */
@@ -20,7 +20,7 @@ const {
 } = require("./patch-report");
 
 const PATCH_ID = "win-native-windows-ssh-target-guard";
-const MARKER = "$codexCmd";
+const MARKER = "codexWindowsSshProbeCommand";
 const REMOTE_WS_PORT = 42817;
 
 function windowsSshStartScriptSource() {
@@ -29,6 +29,10 @@ function windowsSshStartScriptSource() {
 
 function windowsSshStartSource() {
   return `let codexWindowsSshStartScript=\`${windowsSshStartScriptSource()}\`,codexWindowsSshStartCommand=\`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand \${Buffer.from(codexWindowsSshStartScript,\`utf16le\`).toString(\`base64\`)}\`,codexWindowsSshStartProcess=t.Tn({args:[\`ssh\`,...wg(),...Eg(this.options.sshConnection),codexWindowsSshStartCommand],forceSpawnOutsideWsl:!0}),codexWindowsSshStartResult=await Pg({process:codexWindowsSshStartProcess,timeoutMs:_g.remoteBootstrapCommand,timeoutMessage:\`SSH: remote Windows app-server bootstrap timed out\`});if(codexWindowsSshStartResult.code!==0)throw this.createSshSetupError(\`remote_windows_app_server_start\`,Error(await this.getSshCommandFailureMessage(codexWindowsSshStartResult)));return`;
+}
+
+function windowsSshProbePreambleSource() {
+  return "let codexWindowsSshProbeScript=`[Environment]::OSVersion.VersionString`,codexWindowsSshProbeCommand=`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(codexWindowsSshProbeScript,`utf16le`).toString(`base64`)}`,codexWindowsSshProbeProcess=t.Tn({args:[`ssh`,...wg(),...Eg(this.options.sshConnection),codexWindowsSshProbeCommand],forceSpawnOutsideWsl:!0});codexWindowsSshProbeResult=await Pg({process:codexWindowsSshProbeProcess,timeoutMs:1e4,timeoutMessage:`SSH: remote Windows probe timed out`});let codexWindowsSshProbeOutput=`${codexWindowsSshProbeProcess.getStdout().toString(`utf8`)}\\n${codexWindowsSshProbeResult.stderr??``}`;if((codexWindowsSshProbeResult.code===0&&/Windows/i.test(codexWindowsSshProbeOutput))||/OpenSSH_for_Windows/i.test(codexWindowsSshProbeOutput)){";
 }
 
 function directPowerShellWindowsSshStartSource() {
@@ -47,10 +51,7 @@ function windowsSshGuardSource() {
   return [
     "let codexWindowsSshProbeResult;",
     "try{",
-    "let codexWindowsSshProbeProcess=t.Tn({args:[`ssh`,...wg(),...Eg(this.options.sshConnection),`cmd.exe /c ver`],forceSpawnOutsideWsl:!0});",
-    "codexWindowsSshProbeResult=await Pg({process:codexWindowsSshProbeProcess,timeoutMs:1e4,timeoutMessage:`SSH: remote Windows probe timed out`});",
-    "let codexWindowsSshProbeOutput=`${codexWindowsSshProbeProcess.getStdout().toString(`utf8`)}\\n${codexWindowsSshProbeResult.stderr??``}`;",
-    `if(codexWindowsSshProbeResult.code===0&&/Microsoft Windows/i.test(codexWindowsSshProbeOutput)){this.codexWindowsSshRemotePort=${REMOTE_WS_PORT};${windowsSshStartSource()}}`,
+    `${windowsSshProbePreambleSource()}this.codexWindowsSshRemotePort=${REMOTE_WS_PORT};${windowsSshStartSource()}}`,
     "}catch(e){if(e instanceof t.wn)throw e;this.logger.info(`ssh_websocket_v0.remote_windows_probe_skipped`,{safe:{},sensitive:{error:e,sshAlias:this.options.sshConnection.alias,sshHost:this.options.sshConnection.host,sshPort:this.options.sshConnection.port}})}",
   ].join("");
 }
@@ -71,7 +72,7 @@ function oldWindowsSshTransportMethodsSource() {
 }
 
 function applyWindowsSshRemoteGuardPatch(source) {
-  if (source.includes(MARKER)) return source;
+  if (source.includes(MARKER) && source.includes("$codexCmd")) return source;
 
   let patched = source;
   let changed = false;
@@ -90,12 +91,18 @@ function applyWindowsSshRemoteGuardPatch(source) {
   }
 
   const startNeedle = "async startRemoteAppServer(n){let r=eg(),i;";
+  const oldProbeRegex =
+    /let codexWindowsSshProbeProcess=t\.Tn\(\{args:\[`ssh`,\.\.\.wg\(\),\.\.\.Eg\(this\.options\.sshConnection\),`cmd\.exe \/c ver`\],forceSpawnOutsideWsl:!0\}\);codexWindowsSshProbeResult=await Pg\(\{process:codexWindowsSshProbeProcess,timeoutMs:1e4,timeoutMessage:`SSH: remote Windows probe timed out`\}\);let codexWindowsSshProbeOutput=`\$\{codexWindowsSshProbeProcess\.getStdout\(\)\.toString\(`utf8`\)\}\\n\$\{codexWindowsSshProbeResult\.stderr\?\?``\}`;if\(codexWindowsSshProbeResult\.code===0&&\/Microsoft Windows\/i\.test\(codexWindowsSshProbeOutput\)\)\{/u;
   const oldStartSource = oldWindowsSshStartSource();
   const directPowerShellStartSource = directPowerShellWindowsSshStartSource();
   const encodedPowerShellStartSourceWithoutShimHandling =
     encodedPowerShellWindowsSshStartSourceWithoutShimHandling();
   const encodedStartScriptRegex =
     /let codexWindowsSshStartScript=`[^`]*`,codexWindowsSshStartCommand=/u;
+  if (oldProbeRegex.test(patched)) {
+    patched = patched.replace(oldProbeRegex, windowsSshProbePreambleSource());
+    changed = true;
+  }
   if (patched.includes("codexWindowsSshStartScript=`") && !patched.includes("$codexCmd")) {
     patched = patched.replace(
       encodedStartScriptRegex,
