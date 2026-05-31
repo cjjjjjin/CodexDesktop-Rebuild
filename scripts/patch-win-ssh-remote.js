@@ -24,7 +24,7 @@ const MARKER = "codexWindowsSshProbeCommand";
 const REMOTE_WS_PORT = 42817;
 
 function windowsSshStartScriptSource() {
-  return `$ErrorActionPreference='Continue'; $dir=Join-Path $env:USERPROFILE '.codex/app-server-control'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $out=Join-Path $dir 'app-server.out.log'; $err=Join-Path $dir 'app-server.err.log'; $listen='ws://127.0.0.1:\${this.codexWindowsSshRemotePort}'; $codex=(Get-Command \${r} -ErrorAction SilentlyContinue).Source; if(-not $codex){ Write-Error 'codex not found in PATH'; exit 9009 }; $codexDir=Split-Path -Parent $codex; $codexJs=Join-Path $codexDir 'node_modules/@openai/codex/bin/codex.js'; $node=(Get-Command node -ErrorAction SilentlyContinue).Source; $codexExt=[IO.Path]::GetExtension($codex).ToLowerInvariant(); $codexCmd=[IO.Path]::ChangeExtension($codex,'.cmd'); if($node -and (Test-Path $codexJs)){ $launcher=$node; $launcherArgs=@($codexJs,'app-server','--listen',$listen) } elseif($codexExt -eq '.ps1' -and (Test-Path $codexCmd)){ $launcher='cmd.exe'; $launcherArgs='/d /s /c ""'+$codexCmd+'" app-server --listen '+$listen+'"' } elseif($codexExt -eq '.ps1'){ $launcher='powershell.exe'; $launcherArgs=@('-NoProfile','-ExecutionPolicy','Bypass','-File',$codex,'app-server','--listen',$listen) } elseif($codexExt -eq '.cmd' -or $codexExt -eq '.bat'){ $launcher='cmd.exe'; $launcherArgs='/d /s /c ""'+$codex+'" app-server --listen '+$listen+'"' } else { $launcher=$codex; $launcherArgs=@('app-server','--listen',$listen) }; Start-Process -WindowStyle Hidden -FilePath $launcher -ArgumentList $launcherArgs -RedirectStandardOutput $out -RedirectStandardError $err; exit 0`;
+  return `$ErrorActionPreference='Continue'; $dir=Join-Path $env:USERPROFILE '.codex/app-server-control'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $out=Join-Path $dir 'app-server.out.log'; $err=Join-Path $dir 'app-server.err.log'; $listen='ws://127.0.0.1:\${this.codexWindowsSshRemotePort}'; $codex=(Get-Command \${r} -ErrorAction SilentlyContinue).Source; if(-not $codex){ Write-Error 'codex not found in PATH'; exit 9009 }; $codexDir=Split-Path -Parent $codex; $codexJs=Join-Path $codexDir 'node_modules/@openai/codex/bin/codex.js'; $node=(Get-Command node -ErrorAction SilentlyContinue).Source; $codexExt=[IO.Path]::GetExtension($codex).ToLowerInvariant(); $codexCmd=[IO.Path]::ChangeExtension($codex,'.cmd'); if($node -and (Test-Path $codexJs)){ $cmdLine='cmd.exe /d /s /c ""'+$node+'" "'+$codexJs+'" app-server --listen '+$listen+' > "'+$out+'" 2> "'+$err+'""'; $createResult=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmdLine }; if($createResult.ReturnValue -ne 0){ Write-Error ('failed to create app-server process: '+$createResult.ReturnValue); exit $createResult.ReturnValue }; exit 0 } elseif($codexExt -eq '.ps1' -and (Test-Path $codexCmd)){ $launcher='cmd.exe'; $launcherArgs='/d /s /c ""'+$codexCmd+'" app-server --listen '+$listen+'"' } elseif($codexExt -eq '.ps1'){ $launcher='powershell.exe'; $launcherArgs=@('-NoProfile','-ExecutionPolicy','Bypass','-File',$codex,'app-server','--listen',$listen) } elseif($codexExt -eq '.cmd' -or $codexExt -eq '.bat'){ $launcher='cmd.exe'; $launcherArgs='/d /s /c ""'+$codex+'" app-server --listen '+$listen+'"' } else { $launcher=$codex; $launcherArgs=@('app-server','--listen',$listen) }; Start-Process -WindowStyle Hidden -FilePath $launcher -ArgumentList $launcherArgs -RedirectStandardOutput $out -RedirectStandardError $err; exit 0`;
 }
 
 function windowsSshStartSource() {
@@ -76,6 +76,7 @@ function applyWindowsSshRemoteGuardPatch(source) {
     source.includes(MARKER) &&
     source.includes("$codexCmd") &&
     source.includes("$codexJs") &&
+    source.includes("Invoke-CimMethod") &&
     !source.includes("OpenSSH_for_Windows")
   ) {
     return source;
@@ -116,7 +117,7 @@ function applyWindowsSshRemoteGuardPatch(source) {
     );
     changed = true;
   }
-  if (patched.includes("codexWindowsSshStartScript=`") && !patched.includes("$codexJs")) {
+  if (patched.includes("codexWindowsSshStartScript=`") && !patched.includes("Invoke-CimMethod")) {
     patched = patched.replace(
       encodedStartScriptRegex,
       `let codexWindowsSshStartScript=\`${windowsSshStartScriptSource()}\`,codexWindowsSshStartCommand=`,

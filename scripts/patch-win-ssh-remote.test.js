@@ -35,6 +35,8 @@ test("injects a native Windows SSH transport before the POSIX bootstrap", () => 
   assert.match(patched, /\$codexJs/);
   assert.match(patched, /node_modules\/@openai\/codex\/bin\/codex\.js/);
   assert.match(patched, /Get-Command node/);
+  assert.match(patched, /Invoke-CimMethod/);
+  assert.match(patched, /Win32_Process/);
   assert.match(patched, /ChangeExtension\(\$codex,'\.cmd'\)/);
   assert.match(patched, /-File.*\$codex.*app-server/s);
   assert.match(patched, /Start-Process -WindowStyle Hidden/);
