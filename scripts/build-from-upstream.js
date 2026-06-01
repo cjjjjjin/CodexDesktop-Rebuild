@@ -31,6 +31,25 @@ function clearDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
+function resolveSevenZipCommand() {
+  const candidates = [
+    "7zz",
+    "7z",
+    "C:\\Program Files\\7-Zip\\7z.exe",
+    "C:\\Program Files (x86)\\7-Zip\\7z.exe",
+  ];
+
+  for (const candidate of candidates) {
+    const command = candidate.includes("\\") ? `"${candidate}"` : candidate;
+    try {
+      execSync(`${command} i`, { stdio: "pipe" });
+      return command;
+    } catch {}
+  }
+
+  throw new Error("7-Zip not found. Install 7-Zip or add 7zz/7z to PATH.");
+}
+
 function copyRecursive(src, dest) {
   fs.mkdirSync(dest, { recursive: true });
   let count = 0;
@@ -244,7 +263,8 @@ function buildWin(platform) {
   const zipName = `Codex-win-x64-${version}.zip`;
   const zipPath = path.join(OUT_DIR, zipName);
   console.log(`   [zip] ${zipName}`);
-  execSync(`7zz a -tzip -mx=5 "${zipPath}" .`, { cwd: outApp });
+  const sevenZip = resolveSevenZipCommand();
+  execSync(`${sevenZip} a -tzip -mx=5 "${zipPath}" .`, { cwd: outApp });
 
   const sizeMB = (fs.statSync(zipPath).size / 1048576).toFixed(1);
   console.log(`   [ok] ${zipPath} (${sizeMB} MB)`);
