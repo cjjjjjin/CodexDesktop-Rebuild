@@ -64,6 +64,26 @@ function windowsSshTransportMethodsSource() {
   ].join("");
 }
 
+function applyWindowsSshRemoteTerminalPatch(source) {
+  if (source.includes("codexWindowsSshTerminalPlatform")) {
+    return source;
+  }
+
+  const remoteTerminalNeedle =
+    "createRemoteTerminalBackend(e){let t=this.getProcessConnectionForHostId?.(e.hostId)??null,n=Xh(),r=null;return r=new VJ(t?.startProcess({processHandle:e.sessionId,command:n,tty:!0,size:{cols:e.cols,rows:e.rows},streamStdoutStderr:!0,outputBytesCap:null,timeoutMs:null,cwd:e.requestedCwd,env:this.buildRemoteProcessEnv(),onStdoutDelta:e=>{r?.handleOutputDelta(e)},onStderrDelta:e=>{r?.handleOutputDelta(e)}})??Promise.reject(Error(`Remote process connection is unavailable`)),e.callbacks),{backend:r,shell:xA(n),shellKind:`posix`,pendingState:{buffer:``,exit:null}}}";
+  const remoteTerminalReplacement =
+    "async createRemoteTerminalBackend(e){let t=this.getProcessConnectionForHostId?.(e.hostId)??null,n=await t?.platformOs?.().catch(()=>null),codexWindowsSshTerminalPlatform=typeof n==`string`&&/windows/i.test(n)?`windows`:`posix`,r=codexWindowsSshTerminalPlatform===`windows`?[`powershell.exe`,`-NoLogo`,`-NoExit`,`-ExecutionPolicy`,`Bypass`]:Xh(),i=null;return i=new VJ(t?.startProcess({processHandle:e.sessionId,command:r,tty:!0,size:{cols:e.cols,rows:e.rows},streamStdoutStderr:!0,outputBytesCap:null,timeoutMs:null,cwd:e.requestedCwd,env:this.buildRemoteProcessEnv(),onStdoutDelta:e=>{i?.handleOutputDelta(e)},onStderrDelta:e=>{i?.handleOutputDelta(e)}})??Promise.reject(Error(`Remote process connection is unavailable`)),e.callbacks),{backend:i,shell:xA(r),shellKind:codexWindowsSshTerminalPlatform===`windows`?`powershell`:`posix`,pendingState:{buffer:``,exit:null}}}";
+
+  if (source.includes(remoteTerminalNeedle)) {
+    return source.replace(remoteTerminalNeedle, remoteTerminalReplacement);
+  }
+
+  if (source.includes("createRemoteTerminalBackend")) {
+    console.warn("WARN: Could not find remote terminal backend shape - skipping Windows SSH remote terminal patch");
+  }
+  return source;
+}
+
 function oldWindowsSshTransportMethodsSource() {
   return [
     "async getCodexWindowsSshLocalPort(){return await new Promise((e,t)=>{let n=h.default.createServer();n.once(`error`,t),n.listen(0,`127.0.0.1`,()=>{let r=n.address(),i=typeof r==`object`&&r?r.port:null;n.close(()=>{i==null?t(Error(`Unable to allocate local SSH tunnel port`)):e(i)})})})}",
@@ -79,7 +99,7 @@ function applyWindowsSshRemoteGuardPatch(source) {
     source.includes("Invoke-CimMethod") &&
     !source.includes("OpenSSH_for_Windows")
   ) {
-    return source;
+    return applyWindowsSshRemoteTerminalPatch(source);
   }
 
   let patched = source;
@@ -178,7 +198,8 @@ function applyWindowsSshRemoteGuardPatch(source) {
     console.warn("WARN: Could not find SSH proxy method shape - skipping Windows SSH remote transport patch");
   }
 
-  return changed ? patched : source;
+  const terminalPatched = applyWindowsSshRemoteTerminalPatch(patched);
+  return changed || terminalPatched !== patched ? terminalPatched : source;
 }
 
 function parseArgs(argv) {
@@ -261,6 +282,7 @@ if (require.main === module) {
 module.exports = {
   MARKER,
   PATCH_ID,
+  applyWindowsSshRemoteTerminalPatch,
   applyWindowsSshRemoteGuardPatch,
   patchBundles,
 };
