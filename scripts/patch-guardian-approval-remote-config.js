@@ -48,7 +48,18 @@ function applyGuardianApprovalRemoteConfigPatch(source) {
     patched = patched.replace(syncNeedle, syncReplacement);
     changed = true;
   } else {
-    console.warn("WARN: Could not find remote config sync key list - skipping guardian approval sync key");
+    const syncKeyListRegex =
+      /var ([A-Za-z_$][\w$]*)=\[`features\.js_repl`,`mcp_servers\.\$\{([A-Za-z_$][\w$]*)\.jn\}`\]/u;
+    const match = patched.match(syncKeyListRegex);
+    if (match != null) {
+      patched = patched.replace(
+        match[0],
+        `var ${match[1]}=[\`features.js_repl\`,\`features.guardian_approval\`,\`mcp_servers.\${${match[2]}.jn}\`]`,
+      );
+      changed = true;
+    } else {
+      console.warn("WARN: Could not find remote config sync key list - skipping guardian approval sync key");
+    }
   }
 
   return changed ? patched : source;

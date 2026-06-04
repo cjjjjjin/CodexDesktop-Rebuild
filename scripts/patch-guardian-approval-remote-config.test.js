@@ -12,6 +12,13 @@ const fixture = [
   "function li(e){return si.map(t=>({keyPath:t,mergeStrategy:`replace`,value:e?.[t]??null}))}",
 ].join("");
 
+const fixtureV2 = [
+  'var Kn={"features.js_repl":!0},qn={nodeModuleDirs:[]};',
+  "function $n(e){return cr([Kn,e])}",
+  "var Oi=[`features.js_repl`,`mcp_servers.${t.jn}`];",
+  "function Ai(e){return Oi.map(t=>({keyPath:t,mergeStrategy:`replace`,value:e?.[t]??null}))}",
+].join("");
+
 test("adds guardian approval to generated remote config and sync keys", () => {
   const patched = applyGuardianApprovalRemoteConfigPatch(fixture);
 
@@ -23,6 +30,14 @@ test("adds guardian approval to generated remote config and sync keys", () => {
 test("guardian approval remote config patch is idempotent", () => {
   const patched = applyGuardianApprovalRemoteConfigPatch(fixture);
 
+  assert.equal(applyGuardianApprovalRemoteConfigPatch(patched), patched);
+});
+
+test("adds guardian approval to updated remote config sync key shape", () => {
+  const patched = applyGuardianApprovalRemoteConfigPatch(fixtureV2);
+
+  assert.match(patched, /"features\.guardian_approval":!0/);
+  assert.match(patched, /var Oi=\[`features\.js_repl`,`features\.guardian_approval`,`mcp_servers\.\$\{t\.jn\}`\]/);
   assert.equal(applyGuardianApprovalRemoteConfigPatch(patched), patched);
 });
 
