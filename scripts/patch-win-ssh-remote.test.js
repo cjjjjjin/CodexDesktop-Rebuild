@@ -42,6 +42,10 @@ test("injects a native Windows SSH transport before the POSIX bootstrap", () => 
   const patched = applyWindowsSshRemoteGuardPatch(fixture);
 
   assert.match(patched, /codexWindowsSshRemotePort/);
+  assert.match(patched, /TcpListener/);
+  assert.match(patched, /LocalEndpoint\.Port/);
+  assert.match(patched, /parseInt\(codexWindowsSshPortOutput\.trim\(\),10\)/);
+  assert.doesNotMatch(patched, /codexWindowsSshRemotePort=42817/);
   assert.match(patched, /openCodexWindowsSshWebSocket/);
   assert.match(patched, /connectCodexWindowsSshRemote/);
   assert.match(patched, /remote_windows_app_server_connect/);
@@ -106,6 +110,10 @@ test("injects native Windows SSH transport into updated desktop bundle shape", (
   const patched = applyWindowsSshRemoteGuardPatch(`${fixtureV2}${terminalBackendFixtureV2}`);
 
   assert.match(patched, /codexWindowsSshRemotePort/);
+  assert.match(patched, /TcpListener/);
+  assert.match(patched, /LocalEndpoint\.Port/);
+  assert.match(patched, /parseInt\(codexWindowsSshPortOutput\.trim\(\),10\)/);
+  assert.doesNotMatch(patched, /codexWindowsSshRemotePort=42817/);
   assert.match(patched, /connectCodexWindowsSshRemote\(codexSshConnectContext\)/);
   assert.match(patched, /new n\._n\(`ws:\/\/127\.0\.0\.1:\$\{t\}\/rpc`/);
   assert.match(patched, /g\.default\.createServer\(\)/);
