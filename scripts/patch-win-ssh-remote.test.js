@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const {
+  applyWindowsSshSandboxRunnerDiagnosticPatch,
   applyWindowsSshRemoteGuardPatch,
 } = require("./patch-win-ssh-remote");
 
@@ -201,6 +202,30 @@ test("wraps worker remote git commands for native Windows SSH hosts", () => {
   assert.match(patched, /\$rest/);
   assert.match(patched, /@rest/);
   assert.equal(applyWindowsSshRemoteGuardPatch(patched), patched);
+});
+
+test("annotates Windows remote sandbox runner pipe-in timeouts", () => {
+  const fixture =
+    "function onNotification(e){case`error`:{let{error:t}=e.params,n=t.message;items.push({type:`error`,message:n});break}}";
+
+  const patched = applyWindowsSshSandboxRunnerDiagnosticPatch(fixture);
+
+  assert.match(patched, /Windows remote sandbox runner failed while connecting pipe-in/);
+  assert.match(patched, /connecting runner pipe-in/);
+  assert.match(patched, /sandboxPolicy/);
+  assert.equal(applyWindowsSshSandboxRunnerDiagnosticPatch(patched), patched);
+});
+
+test("annotates app-server manager error notifications for runner pipe-in timeouts", () => {
+  const fixture =
+    "case`error`:{let{error:e,willRetry:t,threadId:r,turnId:i}=n.params,{message:a,codexErrorInfo:o,additionalDetails:s}=e,c=N(r);this.updateTurnState(c,i,e=>{e.items.push({id:I(),type:`error`,message:a,willRetry:t,errorInfo:o,additionalDetails:s??null})});break}";
+
+  const patched = applyWindowsSshSandboxRunnerDiagnosticPatch(fixture);
+
+  assert.match(patched, /Windows remote sandbox runner failed while connecting pipe-in/);
+  assert.match(patched, /connecting runner pipe-in/);
+  assert.match(patched, /sandboxPolicy/);
+  assert.equal(applyWindowsSshSandboxRunnerDiagnosticPatch(patched), patched);
 });
 
 test("Windows SSH guard patch is idempotent", () => {

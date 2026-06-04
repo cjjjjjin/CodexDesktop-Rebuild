@@ -178,6 +178,35 @@ function applyWindowsSshWorkerGitPatch(source) {
   return source;
 }
 
+function applyWindowsSshSandboxRunnerDiagnosticPatch(source) {
+  if (source.includes("Windows remote sandbox runner failed while connecting pipe-in")) {
+    return source;
+  }
+
+  let patched = source;
+  const messageExpression =
+    "(/connecting runner pipe-in/i.test(n)?`Windows remote sandbox runner failed while connecting pipe-in; this happened before PowerShell executed, so workspace file reads are still allowed by sandboxPolicy. Original error: ${n}`:n)";
+
+  const syntheticNeedle = "let{error:t}=e.params,n=t.message;";
+  if (patched.includes(syntheticNeedle)) {
+    patched = patched.replace(
+      syntheticNeedle,
+      `let{error:t}=e.params,n=t.message;n=${messageExpression};`,
+    );
+  }
+
+  const appServerManagerNeedle =
+    "case`error`:{let{error:e,willRetry:t,threadId:r,turnId:i}=n.params,{message:a,codexErrorInfo:o,additionalDetails:s}=e,c=N(r);";
+  if (patched.includes(appServerManagerNeedle)) {
+    patched = patched.replace(
+      appServerManagerNeedle,
+      "case`error`:{let{error:e,willRetry:t,threadId:r,turnId:i}=n.params,{message:a,codexErrorInfo:o,additionalDetails:s}=e;if(/connecting runner pipe-in/i.test(a))a=`Windows remote sandbox runner failed while connecting pipe-in; this happened before PowerShell executed, so workspace file reads are still allowed by sandboxPolicy. Original error: ${a}`;let c=N(r);",
+    );
+  }
+
+  return patched;
+}
+
 function applyWindowsSshProbeMatchedPatch(source) {
   if (source.includes("codexWindowsSshProbeMatched")) {
     return source;
@@ -213,6 +242,8 @@ function oldWindowsSshTransportMethodsSource() {
 }
 
 function applyWindowsSshRemoteGuardPatch(source) {
+  source = applyWindowsSshSandboxRunnerDiagnosticPatch(source);
+
   const usesV2SshShape =
     source.includes("n.kn({args:[`ssh`,...Xg(),...Qg(this.options.sshConnection)") ||
     source.includes("new n._n(Hg,");
@@ -455,6 +486,11 @@ function patchBundles({ check = false, platform = null, report = null } = {}) {
     pattern: /^worker\.js$/,
     platform: platform ?? "win",
   });
+  const webviewBundles = locateBundles({
+    dir: "assets",
+    pattern: /^app-server-manager-signals-.*\.js$/,
+    platform: platform ?? "win",
+  });
   const bundles = [...mainBundles, ...workerBundles];
 
   if (bundles.length === 0) {
@@ -497,6 +533,33 @@ function patchBundles({ check = false, platform = null, report = null } = {}) {
     }
   }
 
+  for (const bundle of webviewBundles) {
+    const source = fs.readFileSync(bundle.path, "utf8");
+    const patched = applyWindowsSshSandboxRunnerDiagnosticPatch(source);
+    const changed = patched !== source;
+    const status = changed
+      ? "applied"
+      : patched.includes("Windows remote sandbox runner failed while connecting pipe-in")
+        ? "already-applied"
+        : "not-applicable";
+    recordPatch(report, PATCH_ID, status, null, {
+      file: relPath(bundle.path),
+      platform: bundle.platform,
+    });
+
+    if (check) {
+      console.log(`  [${bundle.platform}] ${relPath(bundle.path)}: ${status}`);
+      continue;
+    }
+
+    if (changed) {
+      fs.writeFileSync(bundle.path, patched, "utf8");
+      console.log(`  [ok] ${relPath(bundle.path)}: injected Windows SSH sandbox runner diagnostics`);
+    } else {
+      console.log(`  [${status === "already-applied" ? "ok" : "!"}] ${relPath(bundle.path)}: ${status}`);
+    }
+  }
+
   return failures === 0 ? 0 : 1;
 }
 
@@ -520,6 +583,7 @@ if (require.main === module) {
 module.exports = {
   MARKER,
   PATCH_ID,
+  applyWindowsSshSandboxRunnerDiagnosticPatch,
   applyWindowsSshRemoteTerminalPatch,
   applyWindowsSshRemoteGuardPatch,
   patchBundles,
