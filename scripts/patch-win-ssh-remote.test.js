@@ -38,10 +38,22 @@ const fixtureV2 = [
 const terminalBackendFixtureV2 =
   "createRemoteTerminalBackend(e){let t=this.getProcessConnectionForHostId?.(e.hostId)??null,n=bg(),r=null;return r=new VY(t?.startProcess({processHandle:e.sessionId,command:n,tty:!0,size:{cols:e.cols,rows:e.rows},streamStdoutStderr:!0,outputBytesCap:null,timeoutMs:null,cwd:e.requestedCwd,env:this.buildRemoteProcessEnv(),onStdoutDelta:e=>{r?.handleOutputDelta(e)},onStderrDelta:e=>{r?.handleOutputDelta(e)}})??Promise.reject(Error(`Remote process connection is unavailable`)),e.callbacks),{backend:r,shell:EA(n),shellKind:`posix`,pendingState:{buffer:``,exit:null}}}";
 
+const alreadyPowerShellTerminalFixtureV2 =
+  "async createRemoteTerminalBackend(e){let t=this.getProcessConnectionForHostId?.(e.hostId)??null,r=await t?.platformOs?.().catch(()=>null),codexWindowsSshTerminalPlatform=typeof r==`string`&&/windows/i.test(r)?`windows`:`posix`,i=codexWindowsSshTerminalPlatform===`windows`?[`powershell.exe`,`-NoLogo`,`-NoExit`,`-ExecutionPolicy`,`Bypass`]:bg(),a=null;return a=new VY(t?.startProcess({processHandle:e.sessionId,command:i,tty:!0,size:{cols:e.cols,rows:e.rows},streamStdoutStderr:!0,outputBytesCap:null,timeoutMs:null,cwd:e.requestedCwd,env:this.buildRemoteProcessEnv(),onStdoutDelta:e=>{a?.handleOutputDelta(e)},onStderrDelta:e=>{a?.handleOutputDelta(e)}})??Promise.reject(Error(`Remote process connection is unavailable`)),e.callbacks),{backend:a,shell:EA(i),shellKind:codexWindowsSshTerminalPlatform===`windows`?`powershell`:`posix`,pendingState:{buffer:``,exit:null}}}";
+
+const workerGitFixture =
+  "async function $(e,t,n,r={}){let{env:i,signal:a,timeoutMs:o,onStdoutRaw:s,onStderrRaw:c,maxOutputBytes:l,collectOutput:u=!0,trim:d=!0,allowedNonZeroExitCodes:f,configOverrides:p=[]}=r,m=n.hostConfig,h=t[0],g=crypto.randomUUID().slice(0,8),_=Date.now(),v=J(m);if(t[0]?.startsWith(`-`)===!0)return{command:kQ(v?[`git`,`-C`,e,...t]:[`git`,...t]),success:!1};let y={LC_MESSAGES:`C`,LANGUAGE:`C`,GIT_TERMINAL_PROMPT:`0`,GIT_OPTIONAL_LOCKS:`0`,...i},b=hK(v?y:{...process.env,...y}),x=await r4(e,n,b,u4(i)),S=[...p,`-c`,`core.hooksPath=${!v&&process.platform===`win32`&&!bK()?`NUL`:`/dev/null`}`,`-c`,`core.fsmonitor=${x}`,...t],C,w;try{C=c4(e,S,m,b,u4(i)),w=kQ(C)}catch(t){return{command:kQ(v?[`git`,`-C`,e,...S]:[`git`,...S]),success:!1}}try{ie=v?await J2({appServerClient:n,args:C,cwd:e,collectOutput:u,env:b,outputBytesCap:l,timeoutMs:o,onStdoutDelta:e=>se(`stdout`,e.chunk,e.capReached),onStderrDelta:e=>se(`stderr`,e.chunk,e.capReached),signal:a}):VQ({args:C,cwd:e,env:b,signal:a});return await ie.wait()}catch(t){return{command:w,success:!1,stderr:t instanceof Error?t.message:String(t)}}}";
+
 test("injects a native Windows SSH transport before the POSIX bootstrap", () => {
   const patched = applyWindowsSshRemoteGuardPatch(fixture);
 
   assert.match(patched, /codexWindowsSshRemotePort/);
+  assert.match(patched, /endpoint\.json/);
+  assert.match(patched, /Test-WindowsSshCodexPort/);
+  assert.match(patched, /ConvertFrom-Json/);
+  assert.match(patched, /already listening on/);
+  assert.match(patched, /ProcessId/);
+  assert.match(patched, /ConvertTo-Json/);
   assert.match(patched, /TcpListener/);
   assert.match(patched, /LocalEndpoint\.Port/);
   assert.match(patched, /parseInt\(codexWindowsSshPortOutput\.trim\(\),10\)/);
@@ -61,6 +73,12 @@ test("injects a native Windows SSH transport before the POSIX bootstrap", () => 
   assert.match(patched, /Get-Command node/);
   assert.match(patched, /Invoke-CimMethod/);
   assert.match(patched, /Win32_Process/);
+  assert.match(patched, /codexWindowsSshProbeMatched/);
+  assert.match(patched, /TcpClient/);
+  assert.match(patched, /Windows SSH app-server did not listen/);
+  assert.match(patched, /Get-Content \$err/);
+  assert.match(patched, /Win32_Process/);
+  assert.match(patched, /codexWindowsSshProbeMatched/);
   assert.match(patched, /ChangeExtension\(\$codex,'\.cmd'\)/);
   assert.match(patched, /-File.*\$codex.*app-server/s);
   assert.match(patched, /Start-Process -WindowStyle Hidden/);
@@ -69,6 +87,8 @@ test("injects a native Windows SSH transport before the POSIX bootstrap", () => 
   assert.match(patched, /-L/);
   assert.match(patched, /\[Environment\]::OSVersion\.VersionString/);
   assert.match(patched, /codexWindowsSshProbeCommand/);
+  assert.match(patched, /Native Windows SSH target reached POSIX bootstrap/);
+  assert.match(patched, /MissingStatementBlock/);
   assert.doesNotMatch(patched, /OpenSSH_for_Windows/);
   assert.doesNotMatch(patched, /cmd\.exe \/c ver/);
   assert.doesNotMatch(patched, /,let codexSshConnectContext/);
@@ -90,6 +110,22 @@ test("upgrades the Windows SSH probe without using the local OpenSSH banner", ()
   assert.doesNotMatch(upgraded, /OpenSSH_for_Windows/);
   assert.match(upgraded, /\[Environment\]::OSVersion\.VersionString/);
   assert.match(upgraded, /\$codexCmd/);
+  assert.match(upgraded, /codexWindowsSshProbeMatched/);
+  assert.match(upgraded, /remote_windows_app_server_start/);
+});
+
+test("upgrades endpoint-aware port probes with the matching reusable start bootstrap", () => {
+  const staleStartBootstrap = applyWindowsSshRemoteGuardPatch(fixture)
+    .replace(/Windows SSH app-server already listening on/g, "stale start marker")
+    .replace(/ConvertTo-Json/g, "StaleConvertToJson")
+    .replace(/ProcessId/g, "StaleProcessId");
+
+  const upgraded = applyWindowsSshRemoteGuardPatch(staleStartBootstrap);
+
+  assert.match(upgraded, /Windows SSH app-server already listening on/);
+  assert.match(upgraded, /ConvertTo-Json/);
+  assert.match(upgraded, /ProcessId/);
+  assert.equal(applyWindowsSshRemoteGuardPatch(upgraded), upgraded);
 });
 
 test("uses PowerShell for native Windows SSH remote terminals", () => {
@@ -98,6 +134,8 @@ test("uses PowerShell for native Windows SSH remote terminals", () => {
   assert.match(patched, /codexWindowsSshTerminalPlatform/);
   assert.match(patched, /platformOs\?\.\(\)/);
   assert.match(patched, /powershell\.exe/);
+  assert.match(patched, /PowerShell runner failed to start/);
+  assert.match(patched, /EPERM/);
   assert.match(patched, /-NoLogo/);
   assert.match(patched, /-NoExit/);
   assert.match(patched, /-ExecutionPolicy/);
@@ -110,6 +148,12 @@ test("injects native Windows SSH transport into updated desktop bundle shape", (
   const patched = applyWindowsSshRemoteGuardPatch(`${fixtureV2}${terminalBackendFixtureV2}`);
 
   assert.match(patched, /codexWindowsSshRemotePort/);
+  assert.match(patched, /endpoint\.json/);
+  assert.match(patched, /Test-WindowsSshCodexPort/);
+  assert.match(patched, /ConvertFrom-Json/);
+  assert.match(patched, /already listening on/);
+  assert.match(patched, /ProcessId/);
+  assert.match(patched, /ConvertTo-Json/);
   assert.match(patched, /TcpListener/);
   assert.match(patched, /LocalEndpoint\.Port/);
   assert.match(patched, /parseInt\(codexWindowsSshPortOutput\.trim\(\),10\)/);
@@ -119,15 +163,43 @@ test("injects native Windows SSH transport into updated desktop bundle shape", (
   assert.match(patched, /g\.default\.createServer\(\)/);
   assert.match(patched, /n\.kn\(\{args:\[`ssh`,\.\.\.Xg\(\),\.\.\.Qg\(this\.options\.sshConnection\),codexWindowsSshProbeCommand\]/);
   assert.match(patched, /n\.kn\(\{args:\[`ssh`,\.\.\.Xg\(\),\.\.\.Qg\(this\.options\.sshConnection\),codexWindowsSshStartCommand\]/);
+  assert.match(patched, /Native Windows SSH target reached POSIX bootstrap/);
+  assert.match(patched, /MissingStatementBlock/);
+  assert.match(patched, /TcpClient/);
+  assert.match(patched, /Windows SSH app-server did not listen/);
+  assert.match(patched, /Get-Content \$err/);
   assert.match(patched, /\(0,m\.spawn\)\(`ssh`,\[`-N`,\.\.\.Xg\(\),\.\.\.Qg\(this\.options\.sshConnection\),`-L`,i\]/);
   assert.match(patched, /n\.gn\(s,\{onPongTimeout/);
   assert.match(patched, /new n\.vn\(s\)/);
   assert.match(patched, /codexWindowsSshTerminalPlatform/);
   assert.match(patched, /platformOs\?\.\(\)/);
   assert.match(patched, /powershell\.exe/);
+  assert.match(patched, /PowerShell runner failed to start/);
+  assert.match(patched, /EPERM/);
   assert.doesNotMatch(patched, /h\.default\.createServer/);
   assert.doesNotMatch(patched, /new t\.pn/);
   assert.doesNotMatch(patched, /\.\.\.Eg\(this\.options\.sshConnection\)/);
+  assert.equal(applyWindowsSshRemoteGuardPatch(patched), patched);
+});
+
+test("upgrades already-patched PowerShell terminals with sandbox spawn diagnostics", () => {
+  const patched = applyWindowsSshRemoteGuardPatch(alreadyPowerShellTerminalFixtureV2);
+
+  assert.match(patched, /PowerShell runner failed to start/);
+  assert.match(patched, /EPERM/);
+  assert.equal(applyWindowsSshRemoteGuardPatch(patched), patched);
+});
+
+test("wraps worker remote git commands for native Windows SSH hosts", () => {
+  const patched = applyWindowsSshRemoteGuardPatch(workerGitFixture);
+
+  assert.match(patched, /codexWindowsSshWorkerGitPlatform/);
+  assert.match(patched, /platformOs\?\.\(\)/);
+  assert.match(patched, /powershell\.exe/);
+  assert.match(patched, /-NoProfile/);
+  assert.match(patched, /-NonInteractive/);
+  assert.match(patched, /\$rest/);
+  assert.match(patched, /@rest/);
   assert.equal(applyWindowsSshRemoteGuardPatch(patched), patched);
 });
 

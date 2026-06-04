@@ -23,7 +23,7 @@ const PATCH_ID = "win-native-windows-ssh-target-guard";
 const MARKER = "codexWindowsSshProbeCommand";
 
 function windowsSshStartScriptSource() {
-  return `$ErrorActionPreference='Continue'; $dir=Join-Path $env:USERPROFILE '.codex/app-server-control'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $out=Join-Path $dir 'app-server.out.log'; $err=Join-Path $dir 'app-server.err.log'; $listen='ws://127.0.0.1:\${this.codexWindowsSshRemotePort}'; $codex=(Get-Command \${r} -ErrorAction SilentlyContinue).Source; if(-not $codex){ Write-Error 'codex not found in PATH'; exit 9009 }; $codexDir=Split-Path -Parent $codex; $codexJs=Join-Path $codexDir 'node_modules/@openai/codex/bin/codex.js'; $node=(Get-Command node -ErrorAction SilentlyContinue).Source; $codexExt=[IO.Path]::GetExtension($codex).ToLowerInvariant(); $codexCmd=[IO.Path]::ChangeExtension($codex,'.cmd'); if($node -and (Test-Path $codexJs)){ $cmdLine='cmd.exe /d /s /c ""'+$node+'" "'+$codexJs+'" app-server --listen '+$listen+' > "'+$out+'" 2> "'+$err+'""'; $createResult=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmdLine }; if($createResult.ReturnValue -ne 0){ Write-Error ('failed to create app-server process: '+$createResult.ReturnValue); exit $createResult.ReturnValue }; exit 0 } elseif($codexExt -eq '.ps1' -and (Test-Path $codexCmd)){ $launcher='cmd.exe'; $launcherArgs='/d /s /c ""'+$codexCmd+'" app-server --listen '+$listen+'"' } elseif($codexExt -eq '.ps1'){ $launcher='powershell.exe'; $launcherArgs=@('-NoProfile','-ExecutionPolicy','Bypass','-File',$codex,'app-server','--listen',$listen) } elseif($codexExt -eq '.cmd' -or $codexExt -eq '.bat'){ $launcher='cmd.exe'; $launcherArgs='/d /s /c ""'+$codex+'" app-server --listen '+$listen+'"' } else { $launcher=$codex; $launcherArgs=@('app-server','--listen',$listen) }; Start-Process -WindowStyle Hidden -FilePath $launcher -ArgumentList $launcherArgs -RedirectStandardOutput $out -RedirectStandardError $err; exit 0`;
+  return `$ErrorActionPreference='Continue'; function Test-WindowsSshCodexPort([int]$Port){ $client=$null; try{ $client=[System.Net.Sockets.TcpClient]::new(); $async=$client.BeginConnect('127.0.0.1',$Port,$null,$null); if($async.AsyncWaitHandle.WaitOne(500,$false)){ $client.EndConnect($async); $client.Close(); return $true }; $client.Close(); return $false } catch { try{ if($client){ $client.Close() } } catch {}; return $false } }; $dir=Join-Path $env:USERPROFILE '.codex/app-server-control'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $endpoint=Join-Path $dir 'endpoint.json'; $out=Join-Path $dir 'app-server.out.log'; $err=Join-Path $dir 'app-server.err.log'; $port=[int]\${this.codexWindowsSshRemotePort}; $listen='ws://127.0.0.1:'+$port; if(Test-WindowsSshCodexPort $port){ Write-Output ('Windows SSH app-server already listening on '+$listen); exit 0 }; $codex=(Get-Command \${r} -ErrorAction SilentlyContinue).Source; if(-not $codex){ Write-Error 'codex not found in PATH'; exit 9009 }; $codexDir=Split-Path -Parent $codex; $codexJs=Join-Path $codexDir 'node_modules/@openai/codex/bin/codex.js'; $node=(Get-Command node -ErrorAction SilentlyContinue).Source; $codexExt=[IO.Path]::GetExtension($codex).ToLowerInvariant(); $codexCmd=[IO.Path]::ChangeExtension($codex,'.cmd'); $appServerPid=$null; if($node -and (Test-Path $codexJs)){ $cmdLine='cmd.exe /d /s /c ""'+$node+'" "'+$codexJs+'" app-server --listen '+$listen+' > "'+$out+'" 2> "'+$err+'""'; $createResult=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmdLine }; if($createResult.ReturnValue -ne 0){ Write-Error ('failed to create app-server process: '+$createResult.ReturnValue); exit $createResult.ReturnValue }; $appServerPid=$createResult.ProcessId } else { if($codexExt -eq '.ps1' -and (Test-Path $codexCmd)){ $launcher='cmd.exe'; $launcherArgs='/d /s /c ""'+$codexCmd+'" app-server --listen '+$listen+'"' } elseif($codexExt -eq '.ps1'){ $launcher='powershell.exe'; $launcherArgs=@('-NoProfile','-ExecutionPolicy','Bypass','-File',$codex,'app-server','--listen',$listen) } elseif($codexExt -eq '.cmd' -or $codexExt -eq '.bat'){ $launcher='cmd.exe'; $launcherArgs='/d /s /c ""'+$codex+'" app-server --listen '+$listen+'"' } else { $launcher=$codex; $launcherArgs=@('app-server','--listen',$listen) }; $started=Start-Process -WindowStyle Hidden -FilePath $launcher -ArgumentList $launcherArgs -RedirectStandardOutput $out -RedirectStandardError $err -PassThru; $appServerPid=$started.Id }; $ready=$false; for($i=0;$i -lt 30;$i++){ if(Test-WindowsSshCodexPort $port){ $ready=$true; break }; Start-Sleep -Milliseconds 500 }; if(-not $ready){ Write-Error ('Windows SSH app-server did not listen on '+$listen); if(Test-Path $err){ Write-Error (Get-Content $err -Raw) }; if(Test-Path $out){ Write-Error (Get-Content $out -Raw) }; exit 1 }; [pscustomobject]@{ port=$port; pid=$appServerPid; listen=$listen; startedAt=(Get-Date).ToUniversalTime().ToString('o'); version=1 } | ConvertTo-Json -Compress | Set-Content -Encoding UTF8 -Path $endpoint; exit 0`;
 }
 
 function windowsSshStartSource() {
@@ -35,19 +35,19 @@ function windowsSshStartSourceV2() {
 }
 
 function windowsSshRemotePortSource() {
-  return "let codexWindowsSshPortScript=`$listener=[System.Net.Sockets.TcpListener]::new([Net.IPAddress]::Parse('127.0.0.1'),0); $listener.Start(); try{ [int]$listener.LocalEndpoint.Port } finally { $listener.Stop() }`,codexWindowsSshPortCommand=`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(codexWindowsSshPortScript,`utf16le`).toString(`base64`)}`,codexWindowsSshPortProcess=t.Tn({args:[`ssh`,...wg(),...Eg(this.options.sshConnection),codexWindowsSshPortCommand],forceSpawnOutsideWsl:!0}),codexWindowsSshPortResult=await Pg({process:codexWindowsSshPortProcess,timeoutMs:1e4,timeoutMessage:`SSH: remote Windows port probe timed out`});if(codexWindowsSshPortResult.code!==0)throw this.createSshSetupError(`remote_windows_app_server_port`,Error(await this.getSshCommandFailureMessage(codexWindowsSshPortResult)));let codexWindowsSshPortOutput=codexWindowsSshPortProcess.getStdout().toString(`utf8`),codexWindowsSshRemotePort=parseInt(codexWindowsSshPortOutput.trim(),10);if(!Number.isInteger(codexWindowsSshRemotePort)||codexWindowsSshRemotePort<=0||codexWindowsSshRemotePort>65535)throw this.createSshSetupError(`remote_windows_app_server_port`,Error(`Remote Windows port probe returned invalid port: ${codexWindowsSshPortOutput.trim()}`));this.codexWindowsSshRemotePort=codexWindowsSshRemotePort;";
+  return "let codexWindowsSshPortScript=`$ErrorActionPreference='Continue'; function Test-WindowsSshCodexPort([int]$Port){ $client=$null; try{ $client=[System.Net.Sockets.TcpClient]::new(); $async=$client.BeginConnect('127.0.0.1',$Port,$null,$null); if($async.AsyncWaitHandle.WaitOne(500,$false)){ $client.EndConnect($async); $client.Close(); return $true }; $client.Close(); return $false } catch { try{ if($client){ $client.Close() } } catch {}; return $false } }; $dir=Join-Path $env:USERPROFILE '.codex/app-server-control'; $endpoint=Join-Path $dir 'endpoint.json'; if(Test-Path $endpoint){ try{ $state=Get-Content $endpoint -Raw | ConvertFrom-Json; $savedPort=[int]$state.port; if($savedPort -gt 0 -and $savedPort -le 65535 -and (Test-WindowsSshCodexPort $savedPort)){ [int]$savedPort; exit 0 } } catch {} }; $listener=[System.Net.Sockets.TcpListener]::new([Net.IPAddress]::Parse('127.0.0.1'),0); $listener.Start(); try{ [int]$listener.LocalEndpoint.Port } finally { $listener.Stop() }`,codexWindowsSshPortCommand=`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(codexWindowsSshPortScript,`utf16le`).toString(`base64`)}`,codexWindowsSshPortProcess=t.Tn({args:[`ssh`,...wg(),...Eg(this.options.sshConnection),codexWindowsSshPortCommand],forceSpawnOutsideWsl:!0}),codexWindowsSshPortResult=await Pg({process:codexWindowsSshPortProcess,timeoutMs:1e4,timeoutMessage:`SSH: remote Windows port probe timed out`});if(codexWindowsSshPortResult.code!==0)throw this.createSshSetupError(`remote_windows_app_server_port`,Error(await this.getSshCommandFailureMessage(codexWindowsSshPortResult)));let codexWindowsSshPortOutput=codexWindowsSshPortProcess.getStdout().toString(`utf8`),codexWindowsSshRemotePort=parseInt(codexWindowsSshPortOutput.trim(),10);if(!Number.isInteger(codexWindowsSshRemotePort)||codexWindowsSshRemotePort<=0||codexWindowsSshRemotePort>65535)throw this.createSshSetupError(`remote_windows_app_server_port`,Error(`Remote Windows port probe returned invalid port: ${codexWindowsSshPortOutput.trim()}`));this.codexWindowsSshRemotePort=codexWindowsSshRemotePort;";
 }
 
 function windowsSshRemotePortSourceV2() {
-  return "let codexWindowsSshPortScript=`$listener=[System.Net.Sockets.TcpListener]::new([Net.IPAddress]::Parse('127.0.0.1'),0); $listener.Start(); try{ [int]$listener.LocalEndpoint.Port } finally { $listener.Stop() }`,codexWindowsSshPortCommand=`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(codexWindowsSshPortScript,`utf16le`).toString(`base64`)}`,codexWindowsSshPortProcess=n.kn({args:[`ssh`,...Xg(),...Qg(this.options.sshConnection),codexWindowsSshPortCommand],forceSpawnOutsideWsl:!0}),codexWindowsSshPortResult=await o_({process:codexWindowsSshPortProcess,timeoutMs:1e4,timeoutMessage:`SSH: remote Windows port probe timed out`});if(codexWindowsSshPortResult.code!==0)throw this.createSshSetupError(`remote_windows_app_server_port`,Error(await this.getSshCommandFailureMessage(codexWindowsSshPortResult)));let codexWindowsSshPortOutput=codexWindowsSshPortProcess.getStdout().toString(`utf8`),codexWindowsSshRemotePort=parseInt(codexWindowsSshPortOutput.trim(),10);if(!Number.isInteger(codexWindowsSshRemotePort)||codexWindowsSshRemotePort<=0||codexWindowsSshRemotePort>65535)throw this.createSshSetupError(`remote_windows_app_server_port`,Error(`Remote Windows port probe returned invalid port: ${codexWindowsSshPortOutput.trim()}`));this.codexWindowsSshRemotePort=codexWindowsSshRemotePort;";
+  return "let codexWindowsSshPortScript=`$ErrorActionPreference='Continue'; function Test-WindowsSshCodexPort([int]$Port){ $client=$null; try{ $client=[System.Net.Sockets.TcpClient]::new(); $async=$client.BeginConnect('127.0.0.1',$Port,$null,$null); if($async.AsyncWaitHandle.WaitOne(500,$false)){ $client.EndConnect($async); $client.Close(); return $true }; $client.Close(); return $false } catch { try{ if($client){ $client.Close() } } catch {}; return $false } }; $dir=Join-Path $env:USERPROFILE '.codex/app-server-control'; $endpoint=Join-Path $dir 'endpoint.json'; if(Test-Path $endpoint){ try{ $state=Get-Content $endpoint -Raw | ConvertFrom-Json; $savedPort=[int]$state.port; if($savedPort -gt 0 -and $savedPort -le 65535 -and (Test-WindowsSshCodexPort $savedPort)){ [int]$savedPort; exit 0 } } catch {} }; $listener=[System.Net.Sockets.TcpListener]::new([Net.IPAddress]::Parse('127.0.0.1'),0); $listener.Start(); try{ [int]$listener.LocalEndpoint.Port } finally { $listener.Stop() }`,codexWindowsSshPortCommand=`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(codexWindowsSshPortScript,`utf16le`).toString(`base64`)}`,codexWindowsSshPortProcess=n.kn({args:[`ssh`,...Xg(),...Qg(this.options.sshConnection),codexWindowsSshPortCommand],forceSpawnOutsideWsl:!0}),codexWindowsSshPortResult=await o_({process:codexWindowsSshPortProcess,timeoutMs:1e4,timeoutMessage:`SSH: remote Windows port probe timed out`});if(codexWindowsSshPortResult.code!==0)throw this.createSshSetupError(`remote_windows_app_server_port`,Error(await this.getSshCommandFailureMessage(codexWindowsSshPortResult)));let codexWindowsSshPortOutput=codexWindowsSshPortProcess.getStdout().toString(`utf8`),codexWindowsSshRemotePort=parseInt(codexWindowsSshPortOutput.trim(),10);if(!Number.isInteger(codexWindowsSshRemotePort)||codexWindowsSshRemotePort<=0||codexWindowsSshRemotePort>65535)throw this.createSshSetupError(`remote_windows_app_server_port`,Error(`Remote Windows port probe returned invalid port: ${codexWindowsSshPortOutput.trim()}`));this.codexWindowsSshRemotePort=codexWindowsSshRemotePort;";
 }
 
 function windowsSshProbePreambleSource() {
-  return "let codexWindowsSshProbeScript=`[Environment]::OSVersion.VersionString`,codexWindowsSshProbeCommand=`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(codexWindowsSshProbeScript,`utf16le`).toString(`base64`)}`,codexWindowsSshProbeProcess=t.Tn({args:[`ssh`,...wg(),...Eg(this.options.sshConnection),codexWindowsSshProbeCommand],forceSpawnOutsideWsl:!0});codexWindowsSshProbeResult=await Pg({process:codexWindowsSshProbeProcess,timeoutMs:1e4,timeoutMessage:`SSH: remote Windows probe timed out`});let codexWindowsSshProbeOutput=`${codexWindowsSshProbeProcess.getStdout().toString(`utf8`)}\\n${codexWindowsSshProbeResult.stderr??``}`;if(codexWindowsSshProbeResult.code===0&&/Windows/i.test(codexWindowsSshProbeOutput)){";
+  return "let codexWindowsSshProbeScript=`[Environment]::OSVersion.VersionString`,codexWindowsSshProbeCommand=`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(codexWindowsSshProbeScript,`utf16le`).toString(`base64`)}`,codexWindowsSshProbeProcess=t.Tn({args:[`ssh`,...wg(),...Eg(this.options.sshConnection),codexWindowsSshProbeCommand],forceSpawnOutsideWsl:!0});codexWindowsSshProbeResult=await Pg({process:codexWindowsSshProbeProcess,timeoutMs:1e4,timeoutMessage:`SSH: remote Windows probe timed out`});let codexWindowsSshProbeOutput=`${codexWindowsSshProbeProcess.getStdout().toString(`utf8`)}\\n${codexWindowsSshProbeResult.stderr??``}`;if(codexWindowsSshProbeResult.code===0&&/Windows/i.test(codexWindowsSshProbeOutput)){codexWindowsSshProbeMatched=!0;";
 }
 
 function windowsSshProbePreambleSourceV2() {
-  return "let codexWindowsSshProbeScript=`[Environment]::OSVersion.VersionString`,codexWindowsSshProbeCommand=`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(codexWindowsSshProbeScript,`utf16le`).toString(`base64`)}`,codexWindowsSshProbeProcess=n.kn({args:[`ssh`,...Xg(),...Qg(this.options.sshConnection),codexWindowsSshProbeCommand],forceSpawnOutsideWsl:!0});codexWindowsSshProbeResult=await o_({process:codexWindowsSshProbeProcess,timeoutMs:1e4,timeoutMessage:`SSH: remote Windows probe timed out`});let codexWindowsSshProbeOutput=`${codexWindowsSshProbeProcess.getStdout().toString(`utf8`)}\\n${codexWindowsSshProbeResult.stderr??``}`;if(codexWindowsSshProbeResult.code===0&&/Windows/i.test(codexWindowsSshProbeOutput)){";
+  return "let codexWindowsSshProbeScript=`[Environment]::OSVersion.VersionString`,codexWindowsSshProbeCommand=`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(codexWindowsSshProbeScript,`utf16le`).toString(`base64`)}`,codexWindowsSshProbeProcess=n.kn({args:[`ssh`,...Xg(),...Qg(this.options.sshConnection),codexWindowsSshProbeCommand],forceSpawnOutsideWsl:!0});codexWindowsSshProbeResult=await o_({process:codexWindowsSshProbeProcess,timeoutMs:1e4,timeoutMessage:`SSH: remote Windows probe timed out`});let codexWindowsSshProbeOutput=`${codexWindowsSshProbeProcess.getStdout().toString(`utf8`)}\\n${codexWindowsSshProbeResult.stderr??``}`;if(codexWindowsSshProbeResult.code===0&&/Windows/i.test(codexWindowsSshProbeOutput)){codexWindowsSshProbeMatched=!0;";
 }
 
 function directPowerShellWindowsSshStartSource() {
@@ -64,19 +64,19 @@ function oldWindowsSshStartSource() {
 
 function windowsSshGuardSource() {
   return [
-    "let codexWindowsSshProbeResult;",
+    "let codexWindowsSshProbeResult,codexWindowsSshProbeMatched=!1;",
     "try{",
     `${windowsSshProbePreambleSource()}${windowsSshRemotePortSource()}${windowsSshStartSource()}}`,
-    "}catch(e){if(e instanceof t.wn)throw e;this.logger.info(`ssh_websocket_v0.remote_windows_probe_skipped`,{safe:{},sensitive:{error:e,sshAlias:this.options.sshConnection.alias,sshHost:this.options.sshConnection.host,sshPort:this.options.sshConnection.port}})}",
+    "}catch(e){if(e instanceof t.wn)throw e;if(codexWindowsSshProbeMatched)throw this.createSshSetupError(`remote_windows_app_server_start`,e instanceof Error?e:Error(String(e)));this.logger.info(`ssh_websocket_v0.remote_windows_probe_skipped`,{safe:{},sensitive:{error:e,sshAlias:this.options.sshConnection.alias,sshHost:this.options.sshConnection.host,sshPort:this.options.sshConnection.port}})}",
   ].join("");
 }
 
 function windowsSshGuardSourceV2() {
   return [
-    "let codexWindowsSshProbeResult;",
+    "let codexWindowsSshProbeResult,codexWindowsSshProbeMatched=!1;",
     "try{",
     `${windowsSshProbePreambleSourceV2()}${windowsSshRemotePortSourceV2()}${windowsSshStartSourceV2()}}`,
-    "}catch(e){if(e instanceof n.On)throw e;this.logger.info(`ssh_websocket_v0.remote_windows_probe_skipped`,{safe:{},sensitive:{error:e,sshAlias:this.options.sshConnection.alias,sshHost:this.options.sshConnection.host,sshPort:this.options.sshConnection.port}})}",
+    "}catch(e){if(e instanceof n.On)throw e;if(codexWindowsSshProbeMatched)throw this.createSshSetupError(`remote_windows_app_server_start`,e instanceof Error?e:Error(String(e)));this.logger.info(`ssh_websocket_v0.remote_windows_probe_skipped`,{safe:{},sensitive:{error:e,sshAlias:this.options.sshConnection.alias,sshHost:this.options.sshConnection.host,sshPort:this.options.sshConnection.port}})}",
   ].join("");
 }
 
@@ -97,32 +97,112 @@ function windowsSshTransportMethodsSourceV2() {
 }
 
 function applyWindowsSshRemoteTerminalPatch(source) {
-  if (source.includes("codexWindowsSshTerminalPlatform")) {
+  if (source.includes("PowerShell runner failed to start")) {
     return source;
   }
 
   const remoteTerminalNeedle =
     "createRemoteTerminalBackend(e){let t=this.getProcessConnectionForHostId?.(e.hostId)??null,n=Xh(),r=null;return r=new VJ(t?.startProcess({processHandle:e.sessionId,command:n,tty:!0,size:{cols:e.cols,rows:e.rows},streamStdoutStderr:!0,outputBytesCap:null,timeoutMs:null,cwd:e.requestedCwd,env:this.buildRemoteProcessEnv(),onStdoutDelta:e=>{r?.handleOutputDelta(e)},onStderrDelta:e=>{r?.handleOutputDelta(e)}})??Promise.reject(Error(`Remote process connection is unavailable`)),e.callbacks),{backend:r,shell:xA(n),shellKind:`posix`,pendingState:{buffer:``,exit:null}}}";
-  const remoteTerminalReplacement =
+  const remoteTerminalReplacementWithoutDiagnostics =
     "async createRemoteTerminalBackend(e){let t=this.getProcessConnectionForHostId?.(e.hostId)??null,n=await t?.platformOs?.().catch(()=>null),codexWindowsSshTerminalPlatform=typeof n==`string`&&/windows/i.test(n)?`windows`:`posix`,r=codexWindowsSshTerminalPlatform===`windows`?[`powershell.exe`,`-NoLogo`,`-NoExit`,`-ExecutionPolicy`,`Bypass`]:Xh(),i=null;return i=new VJ(t?.startProcess({processHandle:e.sessionId,command:r,tty:!0,size:{cols:e.cols,rows:e.rows},streamStdoutStderr:!0,outputBytesCap:null,timeoutMs:null,cwd:e.requestedCwd,env:this.buildRemoteProcessEnv(),onStdoutDelta:e=>{i?.handleOutputDelta(e)},onStderrDelta:e=>{i?.handleOutputDelta(e)}})??Promise.reject(Error(`Remote process connection is unavailable`)),e.callbacks),{backend:i,shell:xA(r),shellKind:codexWindowsSshTerminalPlatform===`windows`?`powershell`:`posix`,pendingState:{buffer:``,exit:null}}}";
+  const remoteTerminalReplacement =
+    "async createRemoteTerminalBackend(e){let t=this.getProcessConnectionForHostId?.(e.hostId)??null,n=await t?.platformOs?.().catch(()=>null),codexWindowsSshTerminalPlatform=typeof n==`string`&&/windows/i.test(n)?`windows`:`posix`,r=codexWindowsSshTerminalPlatform===`windows`?[`powershell.exe`,`-NoLogo`,`-NoExit`,`-ExecutionPolicy`,`Bypass`]:Xh(),i=null,a=t?.startProcess({processHandle:e.sessionId,command:r,tty:!0,size:{cols:e.cols,rows:e.rows},streamStdoutStderr:!0,outputBytesCap:null,timeoutMs:null,cwd:e.requestedCwd,env:this.buildRemoteProcessEnv(),onStdoutDelta:e=>{i?.handleOutputDelta(e)},onStderrDelta:e=>{i?.handleOutputDelta(e)}})??Promise.reject(Error(`Remote process connection is unavailable`));return i=new VJ(a.catch(t=>{let n=t instanceof Error?t:Error(String(t)),r=`code`in n?String(n.code):``;if(codexWindowsSshTerminalPlatform===`windows`&&r===`EPERM`)e.callbacks.onData(`PowerShell runner failed to start: sandbox blocked process spawn (EPERM)\\r\\n`);throw n}),e.callbacks),{backend:i,shell:xA(r),shellKind:codexWindowsSshTerminalPlatform===`windows`?`powershell`:`posix`,pendingState:{buffer:``,exit:null}}}";
 
   if (source.includes(remoteTerminalNeedle)) {
     return source.replace(remoteTerminalNeedle, remoteTerminalReplacement);
   }
+  if (source.includes(remoteTerminalReplacementWithoutDiagnostics)) {
+    return source.replace(remoteTerminalReplacementWithoutDiagnostics, remoteTerminalReplacement);
+  }
 
   const remoteTerminalNeedleV2 =
     "createRemoteTerminalBackend(e){let t=this.getProcessConnectionForHostId?.(e.hostId)??null,n=bg(),r=null;return r=new VY(t?.startProcess({processHandle:e.sessionId,command:n,tty:!0,size:{cols:e.cols,rows:e.rows},streamStdoutStderr:!0,outputBytesCap:null,timeoutMs:null,cwd:e.requestedCwd,env:this.buildRemoteProcessEnv(),onStdoutDelta:e=>{r?.handleOutputDelta(e)},onStderrDelta:e=>{r?.handleOutputDelta(e)}})??Promise.reject(Error(`Remote process connection is unavailable`)),e.callbacks),{backend:r,shell:EA(n),shellKind:`posix`,pendingState:{buffer:``,exit:null}}}";
-  const remoteTerminalReplacementV2 =
+  const remoteTerminalReplacementV2WithoutDiagnostics =
     "async createRemoteTerminalBackend(e){let t=this.getProcessConnectionForHostId?.(e.hostId)??null,r=await t?.platformOs?.().catch(()=>null),codexWindowsSshTerminalPlatform=typeof r==`string`&&/windows/i.test(r)?`windows`:`posix`,i=codexWindowsSshTerminalPlatform===`windows`?[`powershell.exe`,`-NoLogo`,`-NoExit`,`-ExecutionPolicy`,`Bypass`]:bg(),a=null;return a=new VY(t?.startProcess({processHandle:e.sessionId,command:i,tty:!0,size:{cols:e.cols,rows:e.rows},streamStdoutStderr:!0,outputBytesCap:null,timeoutMs:null,cwd:e.requestedCwd,env:this.buildRemoteProcessEnv(),onStdoutDelta:e=>{a?.handleOutputDelta(e)},onStderrDelta:e=>{a?.handleOutputDelta(e)}})??Promise.reject(Error(`Remote process connection is unavailable`)),e.callbacks),{backend:a,shell:EA(i),shellKind:codexWindowsSshTerminalPlatform===`windows`?`powershell`:`posix`,pendingState:{buffer:``,exit:null}}}";
+  const remoteTerminalReplacementV2 =
+    "async createRemoteTerminalBackend(e){let t=this.getProcessConnectionForHostId?.(e.hostId)??null,r=await t?.platformOs?.().catch(()=>null),codexWindowsSshTerminalPlatform=typeof r==`string`&&/windows/i.test(r)?`windows`:`posix`,i=codexWindowsSshTerminalPlatform===`windows`?[`powershell.exe`,`-NoLogo`,`-NoExit`,`-ExecutionPolicy`,`Bypass`]:bg(),a=null,o=t?.startProcess({processHandle:e.sessionId,command:i,tty:!0,size:{cols:e.cols,rows:e.rows},streamStdoutStderr:!0,outputBytesCap:null,timeoutMs:null,cwd:e.requestedCwd,env:this.buildRemoteProcessEnv(),onStdoutDelta:e=>{a?.handleOutputDelta(e)},onStderrDelta:e=>{a?.handleOutputDelta(e)}})??Promise.reject(Error(`Remote process connection is unavailable`));return a=new VY(o.catch(t=>{let n=t instanceof Error?t:Error(String(t)),r=`code`in n?String(n.code):``;if(codexWindowsSshTerminalPlatform===`windows`&&r===`EPERM`)e.callbacks.onData(`PowerShell runner failed to start: sandbox blocked process spawn (EPERM)\\r\\n`);throw n}),e.callbacks),{backend:a,shell:EA(i),shellKind:codexWindowsSshTerminalPlatform===`windows`?`powershell`:`posix`,pendingState:{buffer:``,exit:null}}}";
 
   if (source.includes(remoteTerminalNeedleV2)) {
     return source.replace(remoteTerminalNeedleV2, remoteTerminalReplacementV2);
+  }
+  if (source.includes(remoteTerminalReplacementV2WithoutDiagnostics)) {
+    return source.replace(remoteTerminalReplacementV2WithoutDiagnostics, remoteTerminalReplacementV2);
   }
 
   if (source.includes("createRemoteTerminalBackend")) {
     console.warn("WARN: Could not find remote terminal backend shape - skipping Windows SSH remote terminal patch");
   }
   return source;
+}
+
+function applyWindowsSshPosixFallbackGuardPatch(source) {
+  if (source.includes("Native Windows SSH target reached POSIX bootstrap")) {
+    return source;
+  }
+
+  const codexLookupCatchNeedle =
+    "catch(e){throw this.createSshSetupError(`remote_codex_lookup`,e)}";
+  const codexLookupCatchReplacement =
+    "catch(e){let a=e instanceof Error?e.message:String(e);if(/ParserError|MissingStatementBlock/u.test(a))throw this.createSshSetupError(`remote_windows_posix_fallback`,Error(`Native Windows SSH target reached POSIX bootstrap; Windows probe/app-server branch did not complete: ${a}`));throw this.createSshSetupError(`remote_codex_lookup`,e)}";
+
+  if (source.includes(codexLookupCatchNeedle)) {
+    return source.replace(codexLookupCatchNeedle, codexLookupCatchReplacement);
+  }
+
+  return source;
+}
+
+function applyWindowsSshWorkerGitPatch(source) {
+  if (source.includes("codexWindowsSshWorkerGitPlatform")) {
+    return source;
+  }
+
+  const workerGitGuard =
+    "if(v){let codexWindowsSshWorkerGitPlatform=await n.platformOs?.().catch(()=>null);if(typeof codexWindowsSshWorkerGitPlatform==`string`&&/windows/i.test(codexWindowsSshWorkerGitPlatform)){C=[`powershell.exe`,`-NoProfile`,`-NonInteractive`,`-ExecutionPolicy`,`Bypass`,`-Command`,`& { if($args.Count -lt 1){ exit 9009 }; $exe=$args[0]; $rest=if($args.Count -gt 1){ $args[1..($args.Count-1)] } else { @() }; & $exe @rest }`,...C],w=kQ(C)}}";
+  const workerGitNeedle =
+    "try{ie=v?await J2({appServerClient:n,args:C,cwd:e,collectOutput:u,env:b,outputBytesCap:l,timeoutMs:o,";
+  const workerGitReplacement =
+    `${workerGitGuard}${workerGitNeedle}`;
+  const workerGitNeedleWithoutTimeout =
+    "try{ie=v?await J2({appServerClient:n,args:C,cwd:e,collectOutput:u,env:b,outputBytesCap:l,";
+  const workerGitReplacementWithoutTimeout =
+    `${workerGitGuard}${workerGitNeedleWithoutTimeout}`;
+
+  if (source.includes(workerGitNeedle)) {
+    return source.replace(workerGitNeedle, workerGitReplacement);
+  }
+  if (source.includes(workerGitNeedleWithoutTimeout)) {
+    return source.replace(workerGitNeedleWithoutTimeout, workerGitReplacementWithoutTimeout);
+  }
+
+  return source;
+}
+
+function applyWindowsSshProbeMatchedPatch(source) {
+  if (source.includes("codexWindowsSshProbeMatched")) {
+    return source;
+  }
+
+  let patched = source;
+  patched = patched
+    .replace(
+      "let codexWindowsSshProbeResult;try{",
+      "let codexWindowsSshProbeResult,codexWindowsSshProbeMatched=!1;try{",
+    )
+    .replace(
+      "if(codexWindowsSshProbeResult.code===0&&/Windows/i.test(codexWindowsSshProbeOutput)){",
+      "if(codexWindowsSshProbeResult.code===0&&/Windows/i.test(codexWindowsSshProbeOutput)){codexWindowsSshProbeMatched=!0;",
+    )
+    .replace(
+      "}catch(e){if(e instanceof t.wn)throw e;this.logger.info(`ssh_websocket_v0.remote_windows_probe_skipped`,",
+      "}catch(e){if(e instanceof t.wn)throw e;if(codexWindowsSshProbeMatched)throw this.createSshSetupError(`remote_windows_app_server_start`,e instanceof Error?e:Error(String(e)));this.logger.info(`ssh_websocket_v0.remote_windows_probe_skipped`,",
+    )
+    .replace(
+      "}catch(e){if(e instanceof n.On)throw e;this.logger.info(`ssh_websocket_v0.remote_windows_probe_skipped`,",
+      "}catch(e){if(e instanceof n.On)throw e;if(codexWindowsSshProbeMatched)throw this.createSshSetupError(`remote_windows_app_server_start`,e instanceof Error?e:Error(String(e)));this.logger.info(`ssh_websocket_v0.remote_windows_probe_skipped`,",
+    );
+
+  return patched;
 }
 
 function oldWindowsSshTransportMethodsSource() {
@@ -143,6 +223,15 @@ function applyWindowsSshRemoteGuardPatch(source) {
     source.includes("$codexJs") &&
     source.includes("Invoke-CimMethod") &&
     source.includes("TcpListener") &&
+    source.includes("Windows SSH app-server did not listen") &&
+    source.includes("Native Windows SSH target reached POSIX bootstrap") &&
+    source.includes("codexWindowsSshProbeMatched") &&
+    source.includes("endpoint.json") &&
+    source.includes("Test-WindowsSshCodexPort") &&
+    source.includes("ConvertFrom-Json") &&
+    source.includes("Windows SSH app-server already listening on") &&
+    source.includes("ConvertTo-Json") &&
+    source.includes("ProcessId") &&
     !source.includes("codexWindowsSshRemotePort=42817") &&
     !(usesV2SshShape && source.includes("h.default.createServer")) &&
     !source.includes("OpenSSH_for_Windows")
@@ -200,7 +289,43 @@ function applyWindowsSshRemoteGuardPatch(source) {
     );
     changed = true;
   }
-  if (patched.includes("codexWindowsSshStartScript=`") && !patched.includes("Invoke-CimMethod")) {
+  const encodedPortScriptRegex =
+    /let codexWindowsSshPortScript=`[^`]*`,codexWindowsSshPortCommand=/u;
+  if (
+    patched.includes("codexWindowsSshPortScript=`") &&
+    !patched.includes("ConvertFrom-Json")
+  ) {
+    const portSource = usesV2SshShape
+      ? windowsSshRemotePortSourceV2()
+      : windowsSshRemotePortSource();
+    const portScriptReplacement = portSource.match(encodedPortScriptRegex)?.[0];
+    if (!portScriptReplacement) {
+      console.warn("WARN: Could not build Windows SSH endpoint-aware port probe replacement");
+    } else {
+    patched = patched.replace(
+      encodedPortScriptRegex,
+      portScriptReplacement,
+    );
+    changed = true;
+    }
+  }
+  if (
+    patched.includes("codexWindowsSshStartScript=`") &&
+    (!patched.includes("Windows SSH app-server did not listen") ||
+      !patched.includes("Invoke-CimMethod") ||
+      !patched.includes("codexWindowsSshProbeMatched") ||
+      !patched.includes("endpoint.json") ||
+      !patched.includes("Test-WindowsSshCodexPort") ||
+      !patched.includes("Windows SSH app-server already listening on") ||
+      !patched.includes("ConvertTo-Json") ||
+      !patched.includes("ProcessId"))
+  ) {
+    patched = patched.replace(
+      encodedStartScriptRegex,
+      `let codexWindowsSshStartScript=\`${windowsSshStartScriptSource()}\`,codexWindowsSshStartCommand=`,
+    );
+    changed = true;
+  } else if (patched.includes("codexWindowsSshStartScript=`") && !patched.includes("Invoke-CimMethod")) {
     patched = patched.replace(
       encodedStartScriptRegex,
       `let codexWindowsSshStartScript=\`${windowsSshStartScriptSource()}\`,codexWindowsSshStartCommand=`,
@@ -281,6 +406,24 @@ function applyWindowsSshRemoteGuardPatch(source) {
     console.warn("WARN: Could not find SSH proxy method shape - skipping Windows SSH remote transport patch");
   }
 
+  const fallbackGuardPatched = applyWindowsSshPosixFallbackGuardPatch(patched);
+  if (fallbackGuardPatched !== patched) {
+    patched = fallbackGuardPatched;
+    changed = true;
+  }
+
+  const workerGitPatched = applyWindowsSshWorkerGitPatch(patched);
+  if (workerGitPatched !== patched) {
+    patched = workerGitPatched;
+    changed = true;
+  }
+
+  const probeMatchedPatched = applyWindowsSshProbeMatchedPatch(patched);
+  if (probeMatchedPatched !== patched) {
+    patched = probeMatchedPatched;
+    changed = true;
+  }
+
   const terminalPatched = applyWindowsSshRemoteTerminalPatch(patched);
   return changed || terminalPatched !== patched ? terminalPatched : source;
 }
@@ -302,15 +445,21 @@ function patchBundles({ check = false, platform = null, report = null } = {}) {
     return 0;
   }
 
-  const bundles = locateBundles({
+  const mainBundles = locateBundles({
     dir: "build",
     pattern: /^main(-[^.]+)?\.js$/,
     platform: platform ?? "win",
   });
+  const workerBundles = locateBundles({
+    dir: "build",
+    pattern: /^worker\.js$/,
+    platform: platform ?? "win",
+  });
+  const bundles = [...mainBundles, ...workerBundles];
 
   if (bundles.length === 0) {
-    recordPatch(report, PATCH_ID, "failed-required", "No main bundle found");
-    console.error("[x] No main bundle found");
+    recordPatch(report, PATCH_ID, "failed-required", "No main or worker bundle found");
+    console.error("[x] No main or worker bundle found");
     return 1;
   }
 
@@ -321,7 +470,13 @@ function patchBundles({ check = false, platform = null, report = null } = {}) {
       applyWindowsSshRemoteGuardPatch(source),
     );
     const changed = patched !== source;
-    const status = patchStatusFromChange(changed, warnings);
+    const isWorkerBundle = /[\\/]worker\.js$/u.test(bundle.path);
+    const status =
+      isWorkerBundle && patched.includes("codexWindowsSshWorkerGitPlatform")
+        ? changed
+          ? "applied"
+          : "already-applied"
+        : patchStatusFromChange(changed, warnings);
     recordPatch(report, PATCH_ID, status, warnings[0] ?? null, {
       file: relPath(bundle.path),
       platform: bundle.platform,
