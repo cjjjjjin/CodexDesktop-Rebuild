@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * patch-resume-running-thread.js - Treat "cannot resume running thread" as
- * a benign session-selection race in the local conversation view.
+ * patch-resume-running-thread.js - Keep "cannot resume running thread" visible
+ * in the local conversation view.
  *
  * Recent desktop bundles can throw this from maybe-resume-conversation when a
- * selected thread is already running. The stock renderer shows a resume error
- * toast and retries every 750ms, which makes a healthy running session look
- * broken. This patch short-circuits that specific error before toast/retry.
+ * selected thread is already running. We previously short-circuited that
+ * specific error, but Windows SSH resume failures need the original toast/log
+ * path so broken or stale running-thread state can be diagnosed.
  */
 const fs = require("fs");
 const { locateBundles, relPath } = require("./patch-util");
@@ -22,81 +22,71 @@ const PATCH_ID = "resume-running-thread";
 const ERROR_RE = "cannot resume running thread";
 
 function applyLocalConversationThreadPatch(source) {
-  if (source.includes(ERROR_RE)) return source;
-
-  const needle =
-    "catch(r){if(Qt.error(`Failed to resume conversation`,{safe:{},sensitive:{conversationId:e,error:r}}),u.current!==e)return;";
-  const replacement =
+  const hiddenNeedle =
     "catch(r){if(/cannot resume running thread/i.test(N(r))){u.current===e&&(f.current=!1);return}if(Qt.error(`Failed to resume conversation`,{safe:{},sensitive:{conversationId:e,error:r}}),u.current!==e)return;";
+  const exposedReplacement =
+    "catch(r){if(Qt.error(`Failed to resume conversation`,{safe:{},sensitive:{conversationId:e,error:r}}),u.current!==e)return;";
 
-  if (source.includes(needle)) {
-    return source.replace(needle, replacement);
+  if (source.includes(hiddenNeedle)) {
+    return source.replace(hiddenNeedle, exposedReplacement);
   }
 
-  const genericCatch =
-    /catch\((\w+)\)\{if\(Qt\.error\(`Failed to resume conversation`,\{safe:\{\},sensitive:\{conversationId:(\w+),error:\1\}\}\),(\w+)\.current!==\2\)return;/u;
-  const match = source.match(genericCatch);
+  const hiddenGenericCatch =
+    /catch\((\w+)\)\{if\(\/cannot resume running thread\/i\.test\(N\(\1\)\)\)\{(\w+)\.current===(\w+)&&\(f\.current=!1\);return\}if\(Qt\.error\(`Failed to resume conversation`,\{safe:\{\},sensitive:\{conversationId:\3,error:\1\}\}\),\2\.current!==\3\)return;/u;
+  const match = source.match(hiddenGenericCatch);
   if (match == null) {
-    console.warn("WARN: Could not find local conversation resume catch block");
     return source;
   }
 
-  const [full, errorVar, conversationVar, activeResumeRef] = match;
-  const guard =
-    `catch(${errorVar}){if(/cannot resume running thread/i.test(N(${errorVar}))){${activeResumeRef}.current===${conversationVar}&&(f.current=!1);return}`;
-  return source.replace(full, guard + full.slice(`catch(${errorVar}){`.length));
+  const [full, errorVar, activeResumeRef, conversationVar] = match;
+  return source.replace(
+    full,
+    `catch(${errorVar}){if(Qt.error(\`Failed to resume conversation\`,{safe:{},sensitive:{conversationId:${conversationVar},error:${errorVar}}}),${activeResumeRef}.current!==${conversationVar})return;`,
+  );
 }
 
 function applyAppMainPatch(source) {
   let patched = source;
   let changed = false;
 
-  const heartbeatNeedle =
-    "function Pk(e){return Ce(e).toLowerCase().includes(`no rollout found for thread id`)}";
-  const heartbeatReplacement =
+  const heartbeatHidden =
     "function Pk(e){let t=Ce(e).toLowerCase();return t.includes(`no rollout found for thread id`)||t.includes(`cannot resume running thread`)}";
-  if (patched.includes(heartbeatReplacement)) {
-    // Already upgraded.
-  } else if (patched.includes(heartbeatNeedle)) {
-    patched = patched.replace(heartbeatNeedle, heartbeatReplacement);
+  const heartbeatExposed =
+    "function Pk(e){return Ce(e).toLowerCase().includes(`no rollout found for thread id`)}";
+  if (patched.includes(heartbeatHidden)) {
+    patched = patched.replace(heartbeatHidden, heartbeatExposed);
     changed = true;
   } else {
     const heartbeatRegex =
-      /function (\w+)\((\w+)\)\{return (\w+)\(\2\)\.toLowerCase\(\)\.includes\(`no rollout found for thread id`\)\}/u;
+      /function (\w+)\((\w+)\)\{let (\w+)=(\w+)\(\2\)\.toLowerCase\(\);return \3\.includes\(`no rollout found for thread id`\)\|\|\3\.includes\(`cannot resume running thread`\)\}/u;
     const match = patched.match(heartbeatRegex);
     if (match != null) {
       patched = patched.replace(
         match[0],
-        `function ${match[1]}(${match[2]}){let t=${match[3]}(${match[2]}).toLowerCase();return t.includes(\`no rollout found for thread id\`)||t.includes(\`cannot resume running thread\`)}`,
+        `function ${match[1]}(${match[2]}){return ${match[4]}(${match[2]}).toLowerCase().includes(\`no rollout found for thread id\`)}`,
       );
       changed = true;
-    } else {
-      console.warn("WARN: Could not find heartbeat resume terminal-error predicate");
     }
   }
 
-  const handlerNeedle =
-    '"maybe-resume-conversation":MR(async(e,t)=>{await Rt(e,t)})';
-  const handlerReplacement =
+  const handlerHidden =
     '"maybe-resume-conversation":MR(async(e,t)=>{try{await Rt(e,t)}catch(n){if(Ce(n).toLowerCase().includes(`cannot resume running thread`))return;throw n}})';
-  if (patched.includes(handlerReplacement)) {
-    // Already upgraded.
-  } else if (patched.includes(handlerNeedle)) {
-    patched = patched.replace(handlerNeedle, handlerReplacement);
+  const handlerExposed =
+    '"maybe-resume-conversation":MR(async(e,t)=>{await Rt(e,t)})';
+  if (patched.includes(handlerHidden)) {
+    patched = patched.replace(handlerHidden, handlerExposed);
     changed = true;
   } else {
     const handlerRegex =
-      /(["`])maybe-resume-conversation\1:(\w+)\(async\((\w+),(\w+)\)=>\{await (\w+)\(\3,\4\)\}\)/u;
+      /(["`])maybe-resume-conversation\1:(\w+)\(async\((\w+),(\w+)\)=>\{try\{await (\w+)\(\3,\4\)\}catch\((\w+)\)\{if\((\w+)\(\6\)\.toLowerCase\(\)\.includes\(`cannot resume running thread`\)\)return;throw \6\}\}\)/u;
     const match = patched.match(handlerRegex);
     if (match != null) {
       const [full, quote, wrapper, managerVar, paramsVar, resumeFn] = match;
       patched = patched.replace(
         full,
-        `${quote}maybe-resume-conversation${quote}:${wrapper}(async(${managerVar},${paramsVar})=>{try{await ${resumeFn}(${managerVar},${paramsVar})}catch(n){if(Ce(n).toLowerCase().includes(\`cannot resume running thread\`))return;throw n}})`,
+        `${quote}maybe-resume-conversation${quote}:${wrapper}(async(${managerVar},${paramsVar})=>{await ${resumeFn}(${managerVar},${paramsVar})})`,
       );
       changed = true;
-    } else {
-      console.warn("WARN: Could not find maybe-resume-conversation command handler");
     }
   }
 

@@ -16,58 +16,54 @@ const fixture = [
   "d.current??=setTimeout(()=>{d.current=null,m(e=>e+1)},750)}}",
 ].join("");
 
-test("short-circuits cannot resume running thread before toast and retry", () => {
-  const patched = applyLocalConversationThreadPatch(fixture);
+const hiddenLocalFixture = fixture.replace(
+  "catch(r){if(Qt.error(`Failed to resume conversation`,{safe:{},sensitive:{conversationId:e,error:r}}),u.current!==e)return;",
+  "catch(r){if(/cannot resume running thread/i.test(N(r))){u.current===e&&(f.current=!1);return}if(Qt.error(`Failed to resume conversation`,{safe:{},sensitive:{conversationId:e,error:r}}),u.current!==e)return;",
+);
 
-  assert.match(patched, /cannot resume running thread/i);
-  assert.match(
-    patched,
-    /catch\(r\)\{if\(\/cannot resume running thread\/i\.test\(N\(r\)\)\)\{u\.current===e&&\(f\.current=!1\);return\}if\(Qt\.error/,
-  );
+test("exposes cannot resume running thread to the local resume error path", () => {
+  const patched = applyLocalConversationThreadPatch(hiddenLocalFixture);
+
+  assert.equal(patched, fixture);
+  assert.doesNotMatch(patched, /cannot resume running thread/i);
   assert.equal(applyLocalConversationThreadPatch(patched), patched);
 });
 
-test("leaves source unchanged when resume catch block is absent", () => {
+test("leaves stock local resume catch unchanged", () => {
+  assert.equal(applyLocalConversationThreadPatch(fixture), fixture);
+});
+
+test("leaves unrelated source unchanged", () => {
   const source = "function unrelated(){return 1}";
-  const warnings = [];
-  const originalWarn = console.warn;
-  console.warn = (...args) => warnings.push(args.map(String).join(" "));
-  try {
-    assert.equal(applyLocalConversationThreadPatch(source), source);
-  } finally {
-    console.warn = originalWarn;
-  }
-
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /resume catch block/);
+  assert.equal(applyLocalConversationThreadPatch(source), source);
 });
 
-test("treats already-running resume as terminal in app-main heartbeat", () => {
+test("does not treat already-running resume as terminal in app-main heartbeat", () => {
   const source =
-    "function Pk(e){return Ce(e).toLowerCase().includes(`no rollout found for thread id`)}";
+    "function Pk(e){let t=Ce(e).toLowerCase();return t.includes(`no rollout found for thread id`)||t.includes(`cannot resume running thread`)}";
   const patched = applyAppMainPatch(source);
 
-  assert.match(patched, /cannot resume running thread/);
-  assert.match(patched, /let t=Ce\(e\)\.toLowerCase\(\)/);
-  assert.match(patched, /t\.includes\(`no rollout found for thread id`\)\|\|t\.includes\(`cannot resume running thread`\)/);
+  assert.equal(
+    patched,
+    "function Pk(e){return Ce(e).toLowerCase().includes(`no rollout found for thread id`)}",
+  );
   assert.equal(applyAppMainPatch(patched), patched);
 });
 
-test("swallows already-running resume at the maybe-resume command handler", () => {
-  const source = '"maybe-resume-conversation":MR(async(e,t)=>{await Rt(e,t)})';
+test("lets already-running resume reject at the maybe-resume command handler", () => {
+  const source =
+    '"maybe-resume-conversation":MR(async(e,t)=>{try{await Rt(e,t)}catch(n){if(Ce(n).toLowerCase().includes(`cannot resume running thread`))return;throw n}})';
   const patched = applyAppMainPatch(source);
 
-  assert.match(patched, /try\{await Rt\(e,t\)\}catch\(n\)/);
-  assert.match(patched, /Ce\(n\)\.toLowerCase\(\)\.includes\(`cannot resume running thread`\)/);
-  assert.match(patched, /throw n/);
+  assert.equal(patched, '"maybe-resume-conversation":MR(async(e,t)=>{await Rt(e,t)})');
   assert.equal(applyAppMainPatch(patched), patched);
 });
 
-test("combined patch applies local and app-main shapes", () => {
-  const source = `${fixture};function Pk(e){return Ce(e).toLowerCase().includes(\`no rollout found for thread id\`)};"maybe-resume-conversation":MR(async(e,t)=>{await Rt(e,t)})`;
+test("combined patch exposes already-running resume errors", () => {
+  const source = `${hiddenLocalFixture};function Pk(e){let t=Ce(e).toLowerCase();return t.includes(\`no rollout found for thread id\`)||t.includes(\`cannot resume running thread\`)};"maybe-resume-conversation":MR(async(e,t)=>{try{await Rt(e,t)}catch(n){if(Ce(n).toLowerCase().includes(\`cannot resume running thread\`))return;throw n}})`;
   const patched = applyResumeRunningThreadPatch(source);
 
   assert.match(patched, /Failed to resume conversation/);
-  assert.match(patched, /cannot resume running thread/i);
-  assert.match(patched, /try\{await Rt\(e,t\)\}catch\(n\)/);
+  assert.doesNotMatch(patched, /cannot resume running thread/i);
+  assert.doesNotMatch(patched, /try\{await Rt\(e,t\)\}catch\(n\)/);
 });
