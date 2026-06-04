@@ -21,6 +21,23 @@ const fixture = [
 const terminalBackendFixture =
   "createRemoteTerminalBackend(e){let t=this.getProcessConnectionForHostId?.(e.hostId)??null,n=Xh(),r=null;return r=new VJ(t?.startProcess({processHandle:e.sessionId,command:n,tty:!0,size:{cols:e.cols,rows:e.rows},streamStdoutStderr:!0,outputBytesCap:null,timeoutMs:null,cwd:e.requestedCwd,env:this.buildRemoteProcessEnv(),onStdoutDelta:e=>{r?.handleOutputDelta(e)},onStderrDelta:e=>{r?.handleOutputDelta(e)}})??Promise.reject(Error(`Remote process connection is unavailable`)),e.callbacks),{backend:r,shell:xA(n),shellKind:`posix`,pendingState:{buffer:``,exit:null}}}";
 
+const fixtureV2 = [
+  "async connect(){let e=this.startShellEnvLoadForSsh();",
+  "e.promise.then(e=>{}).catch(t=>{}),await this.ensureRemoteAppServer({phase:`connect`,shellEnv:e.getState()});",
+  "let t=null,r=new n._n(Hg,{perMessageDeflate:!1,createConnection:()=>(t=this.createSshProxyStream({phase:`connect`,shellEnv:e.getState()}),t)});",
+  "return r.once(`close`,()=>{t?.destroy()}),n.gn(r,{onPongTimeout:()=>{r.terminate()}}),new n.vn(r)}",
+  "async startRemoteAppServer(e){let r=wg(),i;",
+  "try{i=await this.runRemoteLoginShellCommand({command:[`if command -v `,n.Mn(r),` >/dev/null 2>&1; then exit 0; fi; exit `,String(Jg)].join(``),context:e,operation:`codex_path_probe`,timeoutMessage:`SSH: codex path probe timed out`})}",
+  "catch(e){throw this.createSshSetupError(`remote_codex_lookup`,e)}",
+  "if(i.code===Jg)throw new n.On({failureReason:`remote-codex-not-found`,message:\"No `codex` found in PATH. Please install Codex on the remote machine.\",stage:`remote_codex_lookup`});",
+  "createSshProxyStream(e){return null}",
+  "async runRemoteLoginShellCommand(){let c=n.kn({args:[`ssh`,...Xg(),...Qg(this.options.sshConnection),`true`],forceSpawnOutsideWsl:!0});return o_({process:c,timeoutMs:Vg.remoteBootstrapCommand,timeoutMessage:`x`})}",
+  "}",
+].join("");
+
+const terminalBackendFixtureV2 =
+  "createRemoteTerminalBackend(e){let t=this.getProcessConnectionForHostId?.(e.hostId)??null,n=bg(),r=null;return r=new VY(t?.startProcess({processHandle:e.sessionId,command:n,tty:!0,size:{cols:e.cols,rows:e.rows},streamStdoutStderr:!0,outputBytesCap:null,timeoutMs:null,cwd:e.requestedCwd,env:this.buildRemoteProcessEnv(),onStdoutDelta:e=>{r?.handleOutputDelta(e)},onStderrDelta:e=>{r?.handleOutputDelta(e)}})??Promise.reject(Error(`Remote process connection is unavailable`)),e.callbacks),{backend:r,shell:EA(n),shellKind:`posix`,pendingState:{buffer:``,exit:null}}}";
+
 test("injects a native Windows SSH transport before the POSIX bootstrap", () => {
   const patched = applyWindowsSshRemoteGuardPatch(fixture);
 
@@ -83,6 +100,27 @@ test("uses PowerShell for native Windows SSH remote terminals", () => {
   assert.match(patched, /Bypass/);
   assert.match(patched, /Xh\(\)/);
   assert.match(patched, /shellKind:codexWindowsSshTerminalPlatform===`windows`\?`powershell`:`posix`/);
+});
+
+test("injects native Windows SSH transport into updated desktop bundle shape", () => {
+  const patched = applyWindowsSshRemoteGuardPatch(`${fixtureV2}${terminalBackendFixtureV2}`);
+
+  assert.match(patched, /codexWindowsSshRemotePort/);
+  assert.match(patched, /connectCodexWindowsSshRemote\(codexSshConnectContext\)/);
+  assert.match(patched, /new n\._n\(`ws:\/\/127\.0\.0\.1:\$\{t\}\/rpc`/);
+  assert.match(patched, /g\.default\.createServer\(\)/);
+  assert.match(patched, /n\.kn\(\{args:\[`ssh`,\.\.\.Xg\(\),\.\.\.Qg\(this\.options\.sshConnection\),codexWindowsSshProbeCommand\]/);
+  assert.match(patched, /n\.kn\(\{args:\[`ssh`,\.\.\.Xg\(\),\.\.\.Qg\(this\.options\.sshConnection\),codexWindowsSshStartCommand\]/);
+  assert.match(patched, /\(0,m\.spawn\)\(`ssh`,\[`-N`,\.\.\.Xg\(\),\.\.\.Qg\(this\.options\.sshConnection\),`-L`,i\]/);
+  assert.match(patched, /n\.gn\(s,\{onPongTimeout/);
+  assert.match(patched, /new n\.vn\(s\)/);
+  assert.match(patched, /codexWindowsSshTerminalPlatform/);
+  assert.match(patched, /platformOs\?\.\(\)/);
+  assert.match(patched, /powershell\.exe/);
+  assert.doesNotMatch(patched, /h\.default\.createServer/);
+  assert.doesNotMatch(patched, /new t\.pn/);
+  assert.doesNotMatch(patched, /\.\.\.Eg\(this\.options\.sshConnection\)/);
+  assert.equal(applyWindowsSshRemoteGuardPatch(patched), patched);
 });
 
 test("Windows SSH guard patch is idempotent", () => {
