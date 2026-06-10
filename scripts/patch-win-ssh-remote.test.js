@@ -39,6 +39,18 @@ const fixtureV2 = [
 const terminalBackendFixtureV2 =
   "createRemoteTerminalBackend(e){let t=this.getProcessConnectionForHostId?.(e.hostId)??null,n=bg(),r=null;return r=new VY(t?.startProcess({processHandle:e.sessionId,command:n,tty:!0,size:{cols:e.cols,rows:e.rows},streamStdoutStderr:!0,outputBytesCap:null,timeoutMs:null,cwd:e.requestedCwd,env:this.buildRemoteProcessEnv(),onStdoutDelta:e=>{r?.handleOutputDelta(e)},onStderrDelta:e=>{r?.handleOutputDelta(e)}})??Promise.reject(Error(`Remote process connection is unavailable`)),e.callbacks),{backend:r,shell:EA(n),shellKind:`posix`,pendingState:{buffer:``,exit:null}}}";
 
+const fixtureV3 = [
+  "async connect(){let e=this.startShellEnvLoadForSsh();",
+  "return e.promise.then(e=>{this.logShellEnvLoadForSsh({result:e,sshAttempted:!0,sshPhase:`connect`})}).catch(t=>{this.logger.warning(`ssh_websocket_v0.shell_env_load_unexpected_error`,{safe:{...n_(e.getState()),sshAttempted:!0,sshPhase:`connect`},sensitive:{error:t,path:process.env.PATH??null,sshAlias:this.options.sshConnection.alias,sshHost:this.options.sshConnection.host,sshPort:this.options.sshConnection.port}})}),await this.waitForShellEnvIfProxyCommandNeedsPath(e,`connect`),await this.ensureRemoteAppServer({phase:`connect`,shellEnv:e.getState()}),this.runWithSshStartupGate(async()=>{let n={current:null},r=new t.dn(Rg,{perMessageDeflate:!1,createConnection:()=>(n.current=this.createSshProxyStream({phase:`connect`,shellEnv:e.getState()}),n.current)});return t.un(r,{onPongTimeout:()=>{r.terminate()}}),new t.fn(r)})}",
+  "async startRemoteAppServer(e){let n=vg(),r;",
+  "try{r=await this.runRemoteLoginShellCommand({command:[`if command -v `,t.Nn(n),` >/dev/null 2>&1; then exit 0; fi; exit `,String(Wg)].join(``),context:e,operation:`codex_path_probe`,timeoutMessage:`SSH: codex path probe timed out`})}",
+  "catch(e){throw this.createSshSetupError(`remote_codex_lookup`,e)}",
+  "if(r.code===Wg)throw new t.kn({failureReason:`remote-codex-not-found`,message:\"No `codex` found in PATH. Please install Codex on the remote machine.\",stage:`remote_codex_lookup`});",
+  "createSshProxyStream(e){return null}",
+  "async runRemoteLoginShellCommand(){let c=t.An({args:[`ssh`,...qg(),...Yg(this.options.sshConnection),`true`],forceSpawnOutsideWsl:!0});return __({process:c,timeoutMs:Lg.remoteBootstrapCommand,timeoutMessage:`x`})}",
+  "}",
+].join("");
+
 const alreadyPowerShellTerminalFixtureV2 =
   "async createRemoteTerminalBackend(e){let t=this.getProcessConnectionForHostId?.(e.hostId)??null,r=await t?.platformOs?.().catch(()=>null),codexWindowsSshTerminalPlatform=typeof r==`string`&&/windows/i.test(r)?`windows`:`posix`,i=codexWindowsSshTerminalPlatform===`windows`?[`powershell.exe`,`-NoLogo`,`-NoExit`,`-ExecutionPolicy`,`Bypass`]:bg(),a=null;return a=new VY(t?.startProcess({processHandle:e.sessionId,command:i,tty:!0,size:{cols:e.cols,rows:e.rows},streamStdoutStderr:!0,outputBytesCap:null,timeoutMs:null,cwd:e.requestedCwd,env:this.buildRemoteProcessEnv(),onStdoutDelta:e=>{a?.handleOutputDelta(e)},onStderrDelta:e=>{a?.handleOutputDelta(e)}})??Promise.reject(Error(`Remote process connection is unavailable`)),e.callbacks),{backend:a,shell:EA(i),shellKind:codexWindowsSshTerminalPlatform===`windows`?`powershell`:`posix`,pendingState:{buffer:``,exit:null}}}";
 
@@ -180,6 +192,24 @@ test("injects native Windows SSH transport into updated desktop bundle shape", (
   assert.doesNotMatch(patched, /h\.default\.createServer/);
   assert.doesNotMatch(patched, /new t\.pn/);
   assert.doesNotMatch(patched, /\.\.\.Eg\(this\.options\.sshConnection\)/);
+  assert.equal(applyWindowsSshRemoteGuardPatch(patched), patched);
+});
+
+test("runs the V3 native Windows bootstrap before waiting for remote shell env", () => {
+  const patched = applyWindowsSshRemoteGuardPatch(fixtureV3);
+
+  assert.match(patched, /connectCodexWindowsSshRemote\(codexSshConnectContext\)/);
+  assert.match(patched, /new t\.dn\(`ws:\/\/127\.0\.0\.1:\$\{n\}\/rpc`/);
+  assert.match(patched, /m\.default\.createServer\(\)/);
+  assert.doesNotMatch(patched, /h\.default\.createServer\(\)/);
+  assert.match(patched, /t\.An\(\{args:\[`ssh`,\.\.\.qg\(\),\.\.\.Yg\(this\.options\.sshConnection\),codexWindowsSshProbeCommand\]/);
+  assert.match(patched, /t\.un\(s,\{onPongTimeout/);
+  assert.match(patched, /new t\.fn\(s\)/);
+  assert.ok(
+    patched.indexOf("await this.ensureRemoteAppServer(codexSshConnectContext)") <
+      patched.indexOf("await this.waitForShellEnvIfProxyCommandNeedsPath(e,`connect`)"),
+    "Windows bootstrap should run before shell-env wait on V3 bundles",
+  );
   assert.equal(applyWindowsSshRemoteGuardPatch(patched), patched);
 });
 
