@@ -162,6 +162,20 @@ function applyWindowsSshRemoteTerminalPatch(source) {
     return source.replace(remoteTerminalReplacementV2WithoutDiagnostics, remoteTerminalReplacementV2);
   }
 
+  const remoteTerminalNeedleV3 =
+    "createRemoteTerminalBackend(e){let t=this.getProcessConnectionForHostId?.(e.hostId)??null,n=mg(),r=null;return r=new IX(t?.startProcess({processHandle:e.sessionId,command:n,tty:!0,size:{cols:e.cols,rows:e.rows},streamStdoutStderr:!0,outputBytesCap:null,timeoutMs:null,cwd:e.requestedCwd,env:this.buildRemoteProcessEnv(),onStdoutDelta:e=>{r?.handleOutputDelta(e)},onStderrDelta:e=>{r?.handleOutputDelta(e)}})??Promise.reject(Error(`Remote process connection is unavailable`)),e.callbacks),{backend:r,shell:cj(n),shellKind:`posix`,pendingState:{buffer:``,exit:null}}}";
+  const remoteTerminalReplacementV3WithoutDiagnostics =
+    "async createRemoteTerminalBackend(e){let t=this.getProcessConnectionForHostId?.(e.hostId)??null,n=await t?.platformOs?.().catch(()=>null),codexWindowsSshTerminalPlatform=typeof n==`string`&&/windows/i.test(n)?`windows`:`posix`,r=codexWindowsSshTerminalPlatform===`windows`?[`powershell.exe`,`-NoLogo`,`-NoExit`,`-ExecutionPolicy`,`Bypass`]:mg(),i=null;return i=new IX(t?.startProcess({processHandle:e.sessionId,command:r,tty:!0,size:{cols:e.cols,rows:e.rows},streamStdoutStderr:!0,outputBytesCap:null,timeoutMs:null,cwd:e.requestedCwd,env:this.buildRemoteProcessEnv(),onStdoutDelta:e=>{i?.handleOutputDelta(e)},onStderrDelta:e=>{i?.handleOutputDelta(e)}})??Promise.reject(Error(`Remote process connection is unavailable`)),e.callbacks),{backend:i,shell:cj(r),shellKind:codexWindowsSshTerminalPlatform===`windows`?`powershell`:`posix`,pendingState:{buffer:``,exit:null}}}";
+  const remoteTerminalReplacementV3 =
+    "async createRemoteTerminalBackend(e){let t=this.getProcessConnectionForHostId?.(e.hostId)??null,n=await t?.platformOs?.().catch(()=>null),codexWindowsSshTerminalPlatform=typeof n==`string`&&/windows/i.test(n)?`windows`:`posix`,r=codexWindowsSshTerminalPlatform===`windows`?[`powershell.exe`,`-NoLogo`,`-NoExit`,`-ExecutionPolicy`,`Bypass`]:mg(),i=null,a=t?.startProcess({processHandle:e.sessionId,command:r,tty:!0,size:{cols:e.cols,rows:e.rows},streamStdoutStderr:!0,outputBytesCap:null,timeoutMs:null,cwd:e.requestedCwd,env:this.buildRemoteProcessEnv(),onStdoutDelta:e=>{i?.handleOutputDelta(e)},onStderrDelta:e=>{i?.handleOutputDelta(e)}})??Promise.reject(Error(`Remote process connection is unavailable`));return i=new IX(a.catch(t=>{let n=t instanceof Error?t:Error(String(t)),r=`code`in n?String(n.code):``;if(codexWindowsSshTerminalPlatform===`windows`&&r===`EPERM`)e.callbacks.onData(`PowerShell runner failed to start: sandbox blocked process spawn (EPERM)\\r\\n`);throw n}),e.callbacks),{backend:i,shell:cj(r),shellKind:codexWindowsSshTerminalPlatform===`windows`?`powershell`:`posix`,pendingState:{buffer:``,exit:null}}}";
+
+  if (source.includes(remoteTerminalNeedleV3)) {
+    return source.replace(remoteTerminalNeedleV3, remoteTerminalReplacementV3);
+  }
+  if (source.includes(remoteTerminalReplacementV3WithoutDiagnostics)) {
+    return source.replace(remoteTerminalReplacementV3WithoutDiagnostics, remoteTerminalReplacementV3);
+  }
+
   return source;
 }
 

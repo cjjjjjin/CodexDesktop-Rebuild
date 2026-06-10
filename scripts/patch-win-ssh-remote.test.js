@@ -39,6 +39,9 @@ const fixtureV2 = [
 const terminalBackendFixtureV2 =
   "createRemoteTerminalBackend(e){let t=this.getProcessConnectionForHostId?.(e.hostId)??null,n=bg(),r=null;return r=new VY(t?.startProcess({processHandle:e.sessionId,command:n,tty:!0,size:{cols:e.cols,rows:e.rows},streamStdoutStderr:!0,outputBytesCap:null,timeoutMs:null,cwd:e.requestedCwd,env:this.buildRemoteProcessEnv(),onStdoutDelta:e=>{r?.handleOutputDelta(e)},onStderrDelta:e=>{r?.handleOutputDelta(e)}})??Promise.reject(Error(`Remote process connection is unavailable`)),e.callbacks),{backend:r,shell:EA(n),shellKind:`posix`,pendingState:{buffer:``,exit:null}}}";
 
+const terminalBackendFixtureV3 =
+  "createRemoteTerminalBackend(e){let t=this.getProcessConnectionForHostId?.(e.hostId)??null,n=mg(),r=null;return r=new IX(t?.startProcess({processHandle:e.sessionId,command:n,tty:!0,size:{cols:e.cols,rows:e.rows},streamStdoutStderr:!0,outputBytesCap:null,timeoutMs:null,cwd:e.requestedCwd,env:this.buildRemoteProcessEnv(),onStdoutDelta:e=>{r?.handleOutputDelta(e)},onStderrDelta:e=>{r?.handleOutputDelta(e)}})??Promise.reject(Error(`Remote process connection is unavailable`)),e.callbacks),{backend:r,shell:cj(n),shellKind:`posix`,pendingState:{buffer:``,exit:null}}}";
+
 const fixtureV3 = [
   "async connect(){let e=this.startShellEnvLoadForSsh();",
   "return e.promise.then(e=>{this.logShellEnvLoadForSsh({result:e,sshAttempted:!0,sshPhase:`connect`})}).catch(t=>{this.logger.warning(`ssh_websocket_v0.shell_env_load_unexpected_error`,{safe:{...n_(e.getState()),sshAttempted:!0,sshPhase:`connect`},sensitive:{error:t,path:process.env.PATH??null,sshAlias:this.options.sshConnection.alias,sshHost:this.options.sshConnection.host,sshPort:this.options.sshConnection.port}})}),await this.waitForShellEnvIfProxyCommandNeedsPath(e,`connect`),await this.ensureRemoteAppServer({phase:`connect`,shellEnv:e.getState()}),this.runWithSshStartupGate(async()=>{let n={current:null},r=new t.dn(Rg,{perMessageDeflate:!1,createConnection:()=>(n.current=this.createSshProxyStream({phase:`connect`,shellEnv:e.getState()}),n.current)});return t.un(r,{onPongTimeout:()=>{r.terminate()}}),new t.fn(r)})}",
@@ -210,6 +213,21 @@ test("runs the V3 native Windows bootstrap before waiting for remote shell env",
       patched.indexOf("await this.waitForShellEnvIfProxyCommandNeedsPath(e,`connect`)"),
     "Windows bootstrap should run before shell-env wait on V3 bundles",
   );
+  assert.equal(applyWindowsSshRemoteGuardPatch(patched), patched);
+});
+
+test("uses PowerShell for native Windows SSH remote terminals in V3 bundles", () => {
+  const patched = applyWindowsSshRemoteGuardPatch(terminalBackendFixtureV3);
+
+  assert.match(patched, /codexWindowsSshTerminalPlatform/);
+  assert.match(patched, /platformOs\?\.\(\)/);
+  assert.match(patched, /powershell\.exe/);
+  assert.match(patched, /PowerShell runner failed to start/);
+  assert.match(patched, /EPERM/);
+  assert.match(patched, /shellKind:codexWindowsSshTerminalPlatform===`windows`\?`powershell`:`posix`/);
+  assert.match(patched, /new IX\(/);
+  assert.match(patched, /cj\(r\)/);
+  assert.doesNotMatch(patched, /command:n,tty/);
   assert.equal(applyWindowsSshRemoteGuardPatch(patched), patched);
 });
 
